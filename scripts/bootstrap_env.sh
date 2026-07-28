@@ -2,12 +2,6 @@
 set -euo pipefail
 
 PROJECT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-GRAPHREDUCE_ROOT="$(cd -- "$PROJECT_ROOT/../../graphreduce" && pwd)"
-
-if [[ ! -f "$GRAPHREDUCE_ROOT/setup.py" ]]; then
-    echo "Local GraphReduce checkout not found at $GRAPHREDUCE_ROOT" >&2
-    exit 1
-fi
 
 if [[ -n "${PYTHON_BIN:-}" ]]; then
     :
@@ -29,7 +23,7 @@ PYTHON="$PROJECT_ROOT/.venv/bin/python"
 "$PYTHON" -m pip install --requirement "$PROJECT_ROOT/requirements.local.lock"
 "$PYTHON" -m pip install --no-deps --editable "$PROJECT_ROOT"
 
-"$PYTHON" -c "import graphreduce, pathlib; root = pathlib.Path(r'''$GRAPHREDUCE_ROOT''').resolve(); source = pathlib.Path(graphreduce.__file__).resolve(); assert root in source.parents, f'{source} is not under {root}'; print(f'GraphReduce source: {source}')"
+"$PYTHON" -c 'import importlib.metadata; print("GraphReduce version:", importlib.metadata.version("graphreduce"))'
 "$PYTHON" -m pip check
 
 echo "Environment ready: $PROJECT_ROOT/.venv"

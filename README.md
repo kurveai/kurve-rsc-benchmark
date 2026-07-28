@@ -15,24 +15,14 @@ task runners, metrics, reports, and reproducibility checks.
 
 ## Environment
 
-From this checkout, the local GraphReduce source is installed in editable
-mode. This is intentional: benchmark runs use the current GraphReduce code,
-including the SQL feature-family and wide-sampling fixes.
+GraphReduce is installed from the published `graphreduce==1.9.17` package.
+No neighboring GraphReduce source checkout is required.
 
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install -e ../../graphreduce
 python -m pip install -e .
-```
-
-The local dependency path assumes this layout:
-
-```text
-projects/
-  graphreduce/
-  kurveai/kurve-rsc-benchmark/
 ```
 
 ## Run Tasks

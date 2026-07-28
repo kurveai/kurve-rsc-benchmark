@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Kurve-RSC RelBench v1 reproduction harness"
 requires-python = ">=3.10,<3.13"
 dependencies = [
-    "graphreduce==1.9.16",
+    "graphreduce==1.9.17",
     "relbench==2.1.1",
     "catboost==1.2.10",
     "duckdb==1.2.2",
@@ -22,6 +22,3 @@ dependencies = [
 
 [tool.setuptools]
 packages = ["kurve_rsc"]
-
-[tool.uv.sources]
-graphreduce = { path = "../../graphreduce", editable = true }
