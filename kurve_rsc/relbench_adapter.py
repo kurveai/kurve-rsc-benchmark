@@ -23,7 +23,24 @@ FrameItem = TypeVar("FrameItem")
 FrameResult = TypeVar("FrameResult")
 FrameBuilder = Callable[[duckdb.DuckDBPyConnection, FrameItem], FrameResult]
 TRAINING_FRAME_WORKERS_ENV = "RELBench_TRAINING_FRAME_WORKERS"
+SINGLE_TRAIN_PERIOD_ENV = "RELBENCH_SINGLE_TRAIN_PERIOD"
 logger = logging.getLogger(__name__)
+
+
+def single_train_period_enabled(default: bool = False) -> bool:
+    """Return whether training should use only the latest label period."""
+
+    raw_value = os.environ.get(
+        SINGLE_TRAIN_PERIOD_ENV, "1" if default else "0"
+    ).strip().lower()
+    if raw_value in {"1", "true", "yes", "on"}:
+        return True
+    if raw_value in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(
+        f"{SINGLE_TRAIN_PERIOD_ENV} must be a boolean value "
+        "(1/0, true/false, yes/no, or on/off)"
+    )
 
 
 def get_training_frame_workers(default: int = 1) -> int:
@@ -375,6 +392,9 @@ def get_relbench_task(
 
 def _task_split_timestamp(task, split: str) -> pd.Timestamp:
     if split == "train":
+        # Mirrors RelBench BaseTask._get_table, whose first/latest training
+        # timestamp is one task-specific label period before validation:
+        # https://github.com/snap-stanford/relbench/blob/main/relbench/base/task_base.py#L102-L110
         return task.dataset.val_timestamp - task.timedelta
     if split == "val":
         return task.dataset.val_timestamp
@@ -407,10 +427,16 @@ def _task_split_timestamps(task, split: str, db: Database) -> pd.Series:
     return pd.Series(pd.date_range(start=start, end=end, freq=freq))
 
 
-def _make_split_table(task, split: str, db: Database) -> Table:
+def _make_split_table(
+    task,
+    split: str,
+    db: Database,
+    timestamps: pd.Series | None = None,
+) -> Table:
     """Build a task table against an already-loaded database object."""
 
-    timestamps = _task_split_timestamps(task, split, db)
+    if timestamps is None:
+        timestamps = _task_split_timestamps(task, split, db)
     original_timedelta = task.timedelta
     if isinstance(original_timedelta, pd.Timedelta):
         task.timedelta = _task_timedelta_sql_value(task)
@@ -451,19 +477,32 @@ def get_relbench_split_task_table(
     download: bool = True,
     task=None,
     db: Database | None = None,
+    single_train_period: bool | None = None,
 ) -> tuple[object, Table, list[pd.Timestamp]]:
-    """Build the full official task table and return all of its timestamps.
+    """Build an official task table and return its selected timestamps.
 
-    The examples need the full historical training schedule so that every
-    label window contributes a GraphReduce frame. ``cache_dir`` is disabled
-    here because these examples already own the feature-frame lifecycle and
-    should not depend on writing into the global RelBench cache.
+    By default, training uses the complete historical schedule so every label
+    window contributes a GraphReduce frame. When ``single_train_period`` is
+    true (or ``RELBENCH_SINGLE_TRAIN_PERIOD`` enables it), training uses the
+    latest official cutoff: one task-specific label period before validation.
+    ``cache_dir`` is disabled because these examples own the feature-frame
+    lifecycle and should not depend on the global RelBench cache.
     """
 
     if task is None:
         task = get_relbench_task(dataset_name, task_name, download=download)
     if db is None:
         db = task.dataset.get_db(upto_test_timestamp=split != "test")
+    use_single_period = split == "train" and (
+        single_train_period_enabled()
+        if single_train_period is None
+        else bool(single_train_period)
+    )
+    canonical_timestamp = (
+        pd.Timestamp(_task_split_timestamp(task, "train"))
+        if use_single_period
+        else None
+    )
 
     if db is None:
         original_cache_dir = task.cache_dir
@@ -473,7 +512,12 @@ def get_relbench_split_task_table(
         finally:
             task.cache_dir = original_cache_dir
     else:
-        table = _make_split_table(task, split, db)
+        selected_timestamps = (
+            pd.Series([canonical_timestamp]) if canonical_timestamp is not None else None
+        )
+        table = _make_split_table(task, split, db, selected_timestamps)
+        if use_single_period and table.df.empty:
+            table = _make_split_table(task, split, db)
 
     table.df[task.time_col] = pd.to_datetime(table.df[task.time_col])
     table_timestamps = sorted(
@@ -484,6 +528,26 @@ def get_relbench_split_task_table(
         raise ValueError(
             f"RelBench {dataset_name}/{task_name} {split} task-table timestamps "
             "fall outside the formal schedule"
+        )
+    if use_single_period:
+        assert canonical_timestamp is not None
+        table, selected_timestamp = _select_single_timestamp_table(
+            table,
+            task.time_col,
+            "train",
+            canonical_timestamp,
+        )
+        table_timestamps = [selected_timestamp]
+        selection = (
+            "canonical"
+            if selected_timestamp == canonical_timestamp
+            else "latest available"
+        )
+        print(
+            f"single_train_cut_date: {dataset_name}/{task_name}="
+            f"{selected_timestamp.isoformat()} "
+            f"(val_timestamp - label_period; {selection})",
+            flush=True,
         )
     return task, table, table_timestamps
 
@@ -496,6 +560,8 @@ def _select_single_timestamp_table(
 ) -> tuple[Table, pd.Timestamp]:
     df = table.df.copy()
     df[time_col] = pd.to_datetime(df[time_col])
+    if df.empty:
+        raise ValueError(f"Cannot select a {split} timestamp from an empty task table")
 
     if timestamp is not None:
         timestamp = pd.Timestamp(timestamp)

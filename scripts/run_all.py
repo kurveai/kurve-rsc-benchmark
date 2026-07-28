@@ -16,6 +16,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 TASK_DIR = PROJECT_ROOT / "kurve_rsc"
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "results" / "run_reports"
+SINGLE_TRAIN_PERIOD_ENV = "RELBENCH_SINGLE_TRAIN_PERIOD"
 
 CLASSIFICATION_TASKS = (
     "relbench_amazon_user_churn.py",
@@ -63,7 +64,16 @@ def worker_value(value: str) -> str:
     return str(workers)
 
 
-def parse_args() -> argparse.Namespace:
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw_value = os.environ.get(name, "1" if default else "0").strip().lower()
+    if raw_value in {"1", "true", "yes", "on"}:
+        return True
+    if raw_value in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean value")
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--task-type", choices=sorted(TASK_GROUPS), default="v1")
     parser.add_argument("--task", action="append", default=[])
@@ -77,8 +87,17 @@ def parse_args() -> argparse.Namespace:
         type=worker_value,
         default=worker_value(os.environ.get("RELBench_TRAINING_FRAME_WORKERS", "1")),
     )
+    parser.add_argument(
+        "--single-train-period",
+        action=argparse.BooleanOptionalAction,
+        default=_env_flag(SINGLE_TRAIN_PERIOD_ENV),
+        help=(
+            "Use only the latest official training cutoff for each task "
+            "(validation timestamp minus that task's label period)."
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true")
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def selected_tasks(args: argparse.Namespace) -> list[str]:
@@ -97,6 +116,7 @@ def run_task(task_name: str, args: argparse.Namespace, log_path: Path) -> dict[s
     started_at = datetime.now(timezone.utc).isoformat()
     env = os.environ.copy()
     env["RELBench_TRAINING_FRAME_WORKERS"] = args.training_frame_workers
+    env[SINGLE_TRAIN_PERIOD_ENV] = "1" if args.single_train_period else "0"
     env["PYTHONUNBUFFERED"] = "1"
     env["PYTHONPATH"] = os.pathsep.join(
         [str(TASK_DIR), str(PROJECT_ROOT), env.get("PYTHONPATH", "")]
@@ -121,7 +141,15 @@ def run_task(task_name: str, args: argparse.Namespace, log_path: Path) -> dict[s
                 print(line, end="", flush=True)
             elif any(
                 stripped.startswith(prefix)
-                for prefix in ("validation_metrics:", "test_metrics:", "validation_nmae:", "test_nmae:", "feature_count:", "num_features:")
+                for prefix in (
+                    "single_train_cut_date:",
+                    "validation_metrics:",
+                    "test_metrics:",
+                    "validation_nmae:",
+                    "test_nmae:",
+                    "feature_count:",
+                    "num_features:",
+                )
             ):
                 highlights.append(stripped)
     return {
@@ -135,9 +163,15 @@ def run_task(task_name: str, args: argparse.Namespace, log_path: Path) -> dict[s
     }
 
 
-def write_report(results: list[dict[str, object]], output_dir: Path, task_type: str) -> None:
+def write_report(
+    results: list[dict[str, object]],
+    output_dir: Path,
+    task_type: str,
+    single_train_period: bool = False,
+) -> None:
     payload = {
         "task_type": task_type,
+        "single_train_period": single_train_period,
         "task_count": len(results),
         "passed_count": sum(result["status"] == "passed" for result in results),
         "failed_count": sum(result["status"] == "failed" for result in results),
@@ -149,6 +183,7 @@ def write_report(results: list[dict[str, object]], output_dir: Path, task_type: 
         "# Kurve-RSC RelBench Results",
         "",
         f"- Task type: `{task_type}`",
+        f"- Single train period: `{single_train_period}`",
         f"- Passed: `{payload['passed_count']}`",
         f"- Failed: `{payload['failed_count']}`",
         "",
@@ -174,6 +209,7 @@ def main() -> int:
 
     print(f"Running {len(tasks)} Kurve-RSC RelBench v1 task(s)", flush=True)
     print(f"Training frame workers: {args.training_frame_workers}", flush=True)
+    print(f"Single train period: {args.single_train_period}", flush=True)
     results: list[dict[str, object]] = []
     for index, task_name in enumerate(tasks, start=1):
         print(f"[{index}/{len(tasks)}] starting {task_name}", flush=True)
@@ -186,7 +222,7 @@ def main() -> int:
         )
         if args.stop_on_error and result["status"] == "failed":
             break
-    write_report(results, args.output_dir, args.task_type)
+    write_report(results, args.output_dir, args.task_type, args.single_train_period)
     return 0 if all(result["status"] == "passed" for result in results) else 1
 
 

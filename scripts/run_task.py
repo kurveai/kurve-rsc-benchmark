@@ -12,9 +12,19 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 TASK_DIR = PROJECT_ROOT / "kurve_rsc"
+SINGLE_TRAIN_PERIOD_ENV = "RELBENCH_SINGLE_TRAIN_PERIOD"
 
 
-def main() -> int:
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw_value = os.environ.get(name, "1" if default else "0").strip().lower()
+    if raw_value in {"1", "true", "yes", "on"}:
+        return True
+    if raw_value in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean value")
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("task", help="Task script name, with or without .py")
     parser.add_argument(
@@ -22,6 +32,24 @@ def main() -> int:
         default=os.environ.get("RELBench_TRAINING_FRAME_WORKERS", "1"),
         help="Concurrent training-frame workers, or 'all'.",
     )
+    parser.add_argument(
+        "--single-train-period",
+        action=argparse.BooleanOptionalAction,
+        default=_env_flag(SINGLE_TRAIN_PERIOD_ENV),
+        help=(
+            "Use only the latest official training cutoff: the validation "
+            "timestamp minus this task's label period."
+        ),
+    )
+    return parser
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    return build_parser().parse_args(argv)
+
+
+def main() -> int:
+    parser = build_parser()
     args = parser.parse_args()
 
     task_name = args.task if args.task.endswith(".py") else f"{args.task}.py"
@@ -30,6 +58,7 @@ def main() -> int:
         parser.error(f"unknown task script: {task_name}")
 
     os.environ["RELBench_TRAINING_FRAME_WORKERS"] = str(args.training_frame_workers)
+    os.environ[SINGLE_TRAIN_PERIOD_ENV] = "1" if args.single_train_period else "0"
     sys.path.insert(0, str(TASK_DIR))
     sys.argv = [str(task_path)]
     runpy.run_path(str(task_path), run_name="__main__")
