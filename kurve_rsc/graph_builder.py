@@ -36,6 +36,8 @@ STACK_TABLE_NAME_TO_FILENAME = {
     "votes": "Votes.csv",
     "comments": "Comments.csv",
 }
+USER_BADGE_TS_PERIODS = [7, 30, 90, 180, 365, 730, 1825, 3650]
+
 
 def materialize_rel_stack(data_dir: Path | None = None) -> list[str]:
     return []
@@ -187,6 +189,20 @@ def build_user_badge_features(
     vote_post = _vote_node("votep")
     comment_post = _comment_node("commp")
 
+    nodes = [
+        user,
+        post,
+        badge,
+        post_history,
+        post_links,
+        vote_user,
+        comment_user,
+        vote_post,
+        comment_post,
+    ]
+    for node in nodes:
+        node.ts_periods = USER_BADGE_TS_PERIODS.copy()
+
     gr = GraphReduce(
         name=f"relbench-user-badge-{cut_date.date()}",
         parent_node=user,
@@ -201,17 +217,7 @@ def build_user_badge_features(
         auto_feature_hops_back=4,
         auto_feature_hops_front=0,
     )
-    for node in [
-        user,
-        post,
-        badge,
-        post_history,
-        post_links,
-        vote_user,
-        comment_user,
-        vote_post,
-        comment_post,
-    ]:
+    for node in nodes:
         gr.add_node(node)
 
     gr.add_entity_edge(user, post, parent_key="Id", relation_key="OwnerUserId", reduce=True)
