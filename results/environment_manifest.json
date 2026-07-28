@@ -1,0 +1,12 @@
+{
+  "python": ">=3.10,<3.13",
+  "graphreduce": "1.9.16",
+  "relbench": "2.1.1",
+  "catboost": "1.2.10",
+  "duckdb": "1.2.2",
+  "reproducibility": {
+    "random_seed": 42,
+    "cutoff_policy": "all official RelBench split timestamps",
+    "regression_metric": "MAE / train target standard deviation"
+  }
+}

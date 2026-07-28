@@ -1,0 +1,10 @@
+-e ../../graphreduce
+relbench==2.1.1
+catboost==1.2.10
+duckdb==1.2.2
+numpy<2
+pandas>=1.5,<3
+pyarrow==23.0.1
+scikit-learn==1.6.0
+pooch>=1.8,<2
+pytest>=8,<9

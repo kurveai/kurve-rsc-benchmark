@@ -1,0 +1,36 @@
+{
+  "source": "RelBench v1 public benchmark table supplied for Kurve-RSC reproduction",
+  "classification": {
+    "metric": "auroc",
+    "leader_method": "KumoRFM (fine-tuned)",
+    "leader_values": {
+      "rel-amazon/user-churn": 0.705,
+      "rel-amazon/item-churn": 0.828,
+      "rel-avito/user-visits": 0.783,
+      "rel-avito/user-clicks": 0.668,
+      "rel-event/user-repeat": 0.806,
+      "rel-event/user-ignore": 0.894,
+      "rel-f1/driver-dnf": 0.826,
+      "rel-f1/driver-top3": 0.996,
+      "rel-hm/user-churn": 0.712,
+      "rel-stack/user-engagement": 0.907,
+      "rel-stack/user-badge": 0.899,
+      "rel-trial/study-outcome": 0.712
+    }
+  },
+  "regression": {
+    "metric": "nmae",
+    "leader_method": "RT (pretrained + fine-tuned)",
+    "leader_values": {
+      "rel-amazon/user-ltv": 0.2569,
+      "rel-amazon/item-ltv": 0.0804,
+      "rel-avito/ad-ctr": 0.4319,
+      "rel-event/user-attendance": 0.0303,
+      "rel-f1/driver-position": 0.3757,
+      "rel-hm/item-sales": 0.0948,
+      "rel-stack/post-votes": 0.1455,
+      "rel-trial/study-adverse": 0.1275,
+      "rel-trial/site-success": 0.5519
+    }
+  }
+}

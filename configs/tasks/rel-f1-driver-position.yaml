@@ -1,0 +1,14 @@
+dataset: rel-f1
+task: driver-position
+task_type: regression
+metric: nmae
+lookback_days: 25000
+ts_periods: [7, 30, 90, 365, 730, 1825, 3650]
+node_policies:
+  results:
+    feature_families: [base, conditional, temporal, sequence, episode, context]
+    context_keys: [raceId, constructorId]
+    max_columns: 6
+  standings:
+    feature_families: [base, temporal, sequence]
+    max_columns: 4

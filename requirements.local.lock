@@ -1,0 +1,12 @@
+# Local development environment. The relative editable requirement intentionally
+# resolves to /Users/wesmadrigal/projects/graphreduce in this workspace layout.
+-e ../../graphreduce
+relbench==2.1.1
+catboost==1.2.10
+duckdb==1.2.2
+numpy==1.26.4
+pandas==2.2.3
+pyarrow==19.0.1
+PyYAML==6.0.2
+scikit-learn==1.6.1
+pytest==8.3.5

@@ -1,0 +1,14 @@
+dataset: rel-avito
+task: ad-ctr
+task_type: regression
+metric: nmae
+lookback_days: 90
+ts_periods: [1, 3, 7, 14, 30]
+node_policies:
+  VisitStream:
+    feature_families: [base, conditional, temporal, sequence, episode, context]
+    context_keys: [UserID]
+    max_columns: 6
+  SearchStream:
+    feature_families: [base, conditional, temporal, sequence]
+    max_columns: 4

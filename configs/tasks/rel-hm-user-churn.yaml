@@ -1,0 +1,11 @@
+dataset: rel-hm
+task: user-churn
+task_type: classification
+metric: auroc
+lookback_days: 730
+ts_periods: [1, 7, 30, 90, 365, 730]
+node_policies:
+  transactions:
+    feature_families: [base, conditional, temporal, sequence, episode, context]
+    context_keys: [article_id]
+    max_columns: 6

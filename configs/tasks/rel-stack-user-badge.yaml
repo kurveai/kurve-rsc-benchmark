@@ -1,0 +1,21 @@
+dataset: rel-stack
+task: user-badge
+task_type: classification
+metric: auroc
+entity_source_column: Id
+lookback_days: 3650
+ts_periods: [7, 30, 90, 180, 365, 730, 1825, 3650]
+node_policies:
+  badges:
+    feature_families: [base, conditional, temporal, sequence, episode, context]
+    context_keys: [UserId]
+    max_columns: 4
+  posts:
+    feature_families: [base, semantic, conditional, temporal, sequence, episode]
+    max_columns: 4
+  postHistory:
+    feature_families: [base, semantic, conditional, temporal, sequence, episode]
+    max_columns: 4
+  comments:
+    feature_families: [base, semantic, conditional, temporal, sequence, episode]
+    max_columns: 4

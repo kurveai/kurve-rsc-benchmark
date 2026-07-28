@@ -1,0 +1,11 @@
+dataset: rel-amazon
+task: user-churn
+task_type: classification
+metric: auroc
+max_train_cutoffs: 1
+lookback_days: 3650
+ts_periods: [7, 30, 90, 365, 730]
+node_policies:
+  review:
+    feature_families: [base, conditional, temporal, sequence, episode]
+    max_columns: 8

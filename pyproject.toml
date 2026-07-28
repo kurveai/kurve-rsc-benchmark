@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=65.5.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kurve-rsc-benchmark"
+version = "0.1.0"
+description = "Kurve-RSC RelBench v1 reproduction harness"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "graphreduce==1.9.16",
+    "relbench==2.1.1",
+    "catboost==1.2.10",
+    "duckdb==1.2.2",
+    "numpy<2",
+    "pandas>=1.5,<3",
+    "pyarrow==23.0.1",
+    "scikit-learn==1.6.0",
+    "pooch>=1.8,<2",
+    "pytest>=8,<9",
+]
+
+[tool.setuptools]
+packages = ["kurve_rsc"]
+
+[tool.uv.sources]
+graphreduce = { path = "../../graphreduce", editable = true }

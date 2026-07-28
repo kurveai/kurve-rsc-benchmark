@@ -1,0 +1,36 @@
+{
+  "updated_at_utc": "2026-07-26T18:29:35.057406+00:00",
+  "task_count": 1,
+  "completed_count": 1,
+  "failed_count": 0,
+  "tasks": [
+    {
+      "task_id": "rel-amazon/user-churn",
+      "status": "completed",
+      "task_type": "classification",
+      "metric": "auroc",
+      "feature_count": 142,
+      "selected_config": {
+        "name": "depth5_regularized",
+        "iterations": 2500,
+        "depth": 5,
+        "learning_rate": 0.02,
+        "l2_leaf_reg": 12.0
+      },
+      "validation_metrics": {
+        "average_precision": 0.7521891329599535,
+        "accuracy": 0.6771923317195064,
+        "f1": 0.7685740477673354,
+        "roc_auc": 0.6641644466589866,
+        "mae": 0.41001002211479415
+      },
+      "test_metrics": {
+        "average_precision": 0.719305304389889,
+        "accuracy": 0.660349261832701,
+        "f1": 0.7529466238367503,
+        "roc_auc": 0.6592088969606463,
+        "mae": 0.4144943910166855
+      }
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+tasks:
+  classification:
+    - relbench_amazon_user_churn.py
+    - relbench_amazon_item_churn.py
+    - relbench_avito_user_visits.py
+    - relbench_avito_user_clicks.py
+    - relbench_event_user_repeat.py
+    - relbench_event_user_ignore.py
+    - relbench_f1_driver_dnf.py
+    - relbench_f1_driver_top3.py
+    - relbench_hm_user_churn.py
+    - relbench_user_engagement_local_runner.py
+    - relbench_user_badges_local_runner.py
+    - relbench_trial_study_outcome.py
+  regression:
+    - relbench_amazon_user_ltv.py
+    - relbench_amazon_item_ltv.py
+    - relbench_avito_ad_ctr.py
+    - relbench_event_user_attendance.py
+    - relbench_f1_driver_position.py
+    - relbench_hm_item_sales.py
+    - relbench_post_votes_local_runner.py
+    - relbench_trial_study_adverse.py
+    - relbench_trial_site_success.py

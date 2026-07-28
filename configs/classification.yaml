@@ -1,0 +1,4 @@
+task_type: classification
+metric: roc_auc
+split: official_test
+training_frame_workers: 1
