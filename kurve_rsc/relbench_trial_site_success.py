@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -14,16 +15,23 @@ import pandas as pd
 
 from relbench_trial_task_utils import build_site_features, run_rel_trial_regression_task
 
+MODEL_BACKEND_ENV = "KURVE_RSC_MODEL_BACKEND"
+
 
 def run_rel_trial_site_success(
     data_dir: Path | None = None,
+    use_tabpfn: bool | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, float] | None, dict[str, float] | None, int, list[str], str]:
+    model_backend = os.environ.get(MODEL_BACKEND_ENV, "catboost")
+    if use_tabpfn is not None:
+        model_backend = "tabpfn" if use_tabpfn else "catboost"
     return run_rel_trial_regression_task(
         task_name="site-success",
         feature_builder=build_site_features,
         feature_entity_col="fac_facility_id",
         data_dir=data_dir,
         max_train_frames=5,
+        model_backend=model_backend,
     )
 
 

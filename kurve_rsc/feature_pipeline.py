@@ -1,4 +1,4 @@
-"""Validation-tuned CatBoost helpers for the RelBench examples."""
+"""Model-fitting helpers for the RelBench examples."""
 
 from __future__ import annotations
 
@@ -207,6 +207,67 @@ def fit_tuned_regressor(
     if best_model is None or best_config is None:
         raise RuntimeError("CatBoost regressor tuning produced no model")
     return best_model, best_config, best_mae
+
+
+def prepare_tabpfn_inputs(
+    frame: pd.DataFrame,
+    feature_columns: Sequence[str],
+) -> pd.DataFrame:
+    """Build a compact numeric frame while preserving missing values for TabPFN."""
+
+    return (
+        frame.reindex(columns=list(feature_columns), fill_value=np.nan)
+        .replace([np.inf, -np.inf], np.nan)
+        .astype("float32")
+    )
+
+
+def fit_tabpfn_regressor(
+    train_batch_factory: Callable[[], Iterator[pd.DataFrame]],
+    feature_columns: Sequence[str],
+    target_column: str,
+    val_inputs: pd.DataFrame,
+    val_target: pd.Series,
+    *,
+    regressor_factory: Callable[..., Any] | None = None,
+) -> tuple[Any, float, np.ndarray]:
+    """Fit the local TabPFN regressor on materialized training batches."""
+
+    train_inputs: list[pd.DataFrame] = []
+    train_targets: list[pd.Series] = []
+    for batch in train_batch_factory():
+        if batch.empty:
+            continue
+        train_inputs.append(prepare_tabpfn_inputs(batch, feature_columns))
+        train_targets.append(
+            pd.to_numeric(batch[target_column], errors="coerce")
+            .fillna(0)
+            .astype("float64")
+        )
+    if not train_inputs:
+        raise RuntimeError("TabPFN regressor received no training rows")
+
+    if regressor_factory is None:
+        from tabpfn import TabPFNRegressor
+
+        regressor_factory = TabPFNRegressor
+
+    model = regressor_factory(
+        random_state=42,
+        ignore_pretraining_limits=True,
+    )
+    model.fit(
+        pd.concat(train_inputs, ignore_index=True),
+        pd.concat(train_targets, ignore_index=True),
+    )
+    predictions = np.asarray(
+        model.predict(prepare_tabpfn_inputs(val_inputs, feature_columns)),
+        dtype="float64",
+    )
+    mae = float(
+        mean_absolute_error(val_target.to_numpy(dtype="float64"), predictions)
+    )
+    return model, mae, predictions
 
 
 def _incremental_model_params(config: dict[str, Any], loss_function: str, iterations: int) -> dict[str, Any]:

@@ -8,6 +8,7 @@ RUN python -m pip install --upgrade pip \
         "graphreduce==1.9.17" \
         "relbench==2.1.1" \
         "catboost==1.2.10" \
+        "tabpfn==8.1.0" \
         "duckdb==1.2.2" \
         "numpy<2" \
         "pandas>=1.5,<3" \

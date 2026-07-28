@@ -86,6 +86,22 @@ The selected date is emitted as `single_train_cut_date` in task logs and run
 reports. Omit the flag (or use `--no-single-train-period`) to retain all
 historical training periods.
 
+## TabPFN
+
+TabPFN is currently supported only for the `rel-trial/site-success` regression
+task. CatBoost remains the default for this task and every other benchmark:
+
+```bash
+python scripts/run_task.py relbench_trial_site_success.py \
+  --single-train-period \
+  --tabpfn
+```
+
+This uses the local `TabPFNRegressor` from `tabpfn==8.1.0`. On first use,
+TabPFN downloads its model checkpoint and may require accepting the model
+license. For headless runs, set `TABPFN_TOKEN` as described in the
+[official TabPFN documentation](https://github.com/PriorLabs/TabPFN#basic-usage).
+
 Reports, logs, and machine-readable results are written to `results/`.
 Individual frames spill to Parquet during multi-cutoff training so CatBoost
 can train incrementally without retaining every frame in RAM.

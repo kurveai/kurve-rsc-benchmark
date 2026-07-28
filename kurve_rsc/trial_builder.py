@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import datetime
+import importlib.metadata
 import sys
 from pathlib import Path
 from typing import Callable
@@ -29,7 +30,13 @@ from relbench_dataset_utils import (
     target_table_from_frame,
 )
 from relbench_regression_metrics import add_nmae
-from relbench_catboost_utils import TEMPORAL_FEATURE_FAMILIES, fit_tuned_regressor_incremental, set_feature_families
+from relbench_catboost_utils import (
+    TEMPORAL_FEATURE_FAMILIES,
+    fit_tabpfn_regressor,
+    fit_tuned_regressor_incremental,
+    prepare_tabpfn_inputs,
+    set_feature_families,
+)
 
 LOOKBACK_START = datetime.datetime(2000, 1, 1)
 SITE_SUCCESS_FEATURE_FAMILIES = ("base", "semantic", "context")
@@ -657,7 +664,12 @@ def run_rel_trial_regression_task(
     feature_entity_col: str,
     data_dir: Path | None = None,
     max_train_frames: int | None = None,
+    model_backend: str = "catboost",
 ) -> tuple[RelBenchFrameStore, pd.DataFrame, pd.DataFrame, dict[str, float] | None, dict[str, float] | None, int, list[str], str]:
+    if model_backend not in {"catboost", "tabpfn"}:
+        raise ValueError(f"Unknown model backend: {model_backend}")
+    if model_backend == "tabpfn" and task_name != "site-success":
+        raise ValueError("TabPFN is currently supported only for rel-trial/site-success")
     materialized: list[str] = []
 
     con = duckdb.connect()
@@ -705,20 +717,39 @@ def run_rel_trial_regression_task(
             batch[target] = batch[target].fillna(0).astype("float64")
             yield batch
 
-    model, best_config, best_val_mae = fit_tuned_regressor_incremental(
-        train_batches,
-        feature_columns,
-        target,
-        df_val[feature_columns].fillna(0),
-        df_val[target].astype("float64"),
-        batch_count=len(train_store.part_paths),
-    )
-    print("catboost_config:", best_config, flush=True)
-    print("catboost_validation_mae:", best_val_mae, flush=True)
-    print("catboost_best_iteration:", model.get_best_iteration(), flush=True)
+    print("model_backend:", model_backend, flush=True)
+    if model_backend == "tabpfn":
+        model, best_val_mae, val_predictions = fit_tabpfn_regressor(
+            train_batches,
+            feature_columns,
+            target,
+            df_val,
+            df_val[target].astype("float64"),
+        )
+        print(
+            "tabpfn_version:",
+            importlib.metadata.version("tabpfn"),
+            flush=True,
+        )
+        print("tabpfn_validation_mae:", best_val_mae, flush=True)
+        test_inputs = prepare_tabpfn_inputs(df_test, feature_columns)
+    else:
+        model, best_config, best_val_mae = fit_tuned_regressor_incremental(
+            train_batches,
+            feature_columns,
+            target,
+            df_val[feature_columns].fillna(0),
+            df_val[target].astype("float64"),
+            batch_count=len(train_store.part_paths),
+        )
+        print("catboost_config:", best_config, flush=True)
+        print("catboost_validation_mae:", best_val_mae, flush=True)
+        print("catboost_best_iteration:", model.get_best_iteration(), flush=True)
+        val_inputs = df_val[feature_columns].fillna(0)
+        test_inputs = df_test[feature_columns].fillna(0)
+        val_predictions = np.asarray(model.predict(val_inputs), dtype="float64")
 
-    val_predictions = np.asarray(model.predict(df_val[feature_columns].fillna(0)), dtype="float64")
-    test_predictions = np.asarray(model.predict(df_test[feature_columns].fillna(0)), dtype="float64")
+    test_predictions = np.asarray(model.predict(test_inputs), dtype="float64")
     val_metrics = add_nmae(
         split_tasks["val"].evaluate(
             val_predictions,
