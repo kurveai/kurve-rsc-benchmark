@@ -104,6 +104,17 @@ Use `--training-frame-workers all` to submit one worker per training frame.
 Each worker receives its own DuckDB cursor and source tables are materialized
 when needed to avoid temporary-table collisions.
 
+Long-running `rel-stack` tasks emit `feature_frame_progress` lines for every
+cutoff, including elapsed time when a frame finishes. In particular,
+`rel-stack/user-engagement` builds 46 historical training frames in the full
+schedule, so a run can spend several minutes between the top-level task start
+and finish messages even when it is making progress.
+
+`rel-event/user-ignore` plans its GraphReduce operations on the first training
+cutoff and replays that frozen plan for all later training, validation, and test
+graphs. It also enforces the first graph's feature order and categorical layout,
+so later cutoffs cannot silently change the model inputs.
+
 By default, tasks retain their complete historical training schedule. To use
 only one training label period for a task:
 

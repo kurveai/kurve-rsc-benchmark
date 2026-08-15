@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import datetime
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -434,7 +435,23 @@ def build_task_split_frame(
     frame_store = RelBenchFrameStore(
         f"rel-stack-{task_name}-{split}", persist_each_frame=True
     )
+    progress_by_timestamp = {
+        pd.Timestamp(timestamp): index
+        for index, timestamp in enumerate(cut_timestamps, start=1)
+    }
+    frame_count = len(cut_timestamps)
+
     def build_frame(frame_con: duckdb.DuckDBPyConnection, timestamp: pd.Timestamp) -> pd.DataFrame:
+        timestamp = pd.Timestamp(timestamp)
+        frame_index = progress_by_timestamp[timestamp]
+        started = time.perf_counter()
+        print(
+            "feature_frame_progress: "
+            f"rel-stack/{task_name} split={split} "
+            f"frame={frame_index}/{frame_count} cutoff={timestamp.isoformat()} "
+            "status=started",
+            flush=True,
+        )
         features = feature_builder(frame_con, timestamp.to_pydatetime())
         task_df = task_table.df.copy()
         task_df = task_df[
@@ -449,13 +466,21 @@ def build_task_split_frame(
         task_df[task.entity_col] = task_df[task.entity_col].astype("int64")
         features[feature_entity_col] = features[feature_entity_col].astype("int64")
 
-        return features.merge(
+        frame = features.merge(
             task_df[[task.time_col, task.entity_col, task.target_col]],
             left_on=feature_entity_col,
             right_on=task.entity_col,
             how="right",
             validate="one_to_one",
         )
+        print(
+            "feature_frame_progress: "
+            f"rel-stack/{task_name} split={split} "
+            f"frame={frame_index}/{frame_count} cutoff={timestamp.isoformat()} "
+            f"status=finished duration={time.perf_counter() - started:.3f}s",
+            flush=True,
+        )
+        return frame
 
     frame_workers = None if split == "train" else 1
     for frame in iter_training_frames(con, cut_timestamps, build_frame, workers=frame_workers):

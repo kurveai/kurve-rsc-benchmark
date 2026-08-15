@@ -222,10 +222,13 @@ def run_task(task_name: str, args: argparse.Namespace, log_path: Path) -> dict[s
             stripped = line.strip()
             if args.stream_output:
                 print(line, end="", flush=True)
+            elif stripped.startswith("feature_frame_progress:"):
+                print(f"[{task_name}] {stripped}", flush=True)
             elif any(
                 stripped.startswith(prefix)
                 for prefix in (
                     "single_train_cut_date:",
+                    "frozen_execution_plan:",
                     "model_backend:",
                     "submission_prediction:",
                     "validation_metrics:",

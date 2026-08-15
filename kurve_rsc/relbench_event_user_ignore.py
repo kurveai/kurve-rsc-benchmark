@@ -49,23 +49,90 @@ TARGET_COLUMN = "target"
 def _catboost_inputs(
     frame: pd.DataFrame,
     feature_columns: list[str],
+    categorical_indices: list[int] | None = None,
 ) -> tuple[pd.DataFrame, list[int]]:
-    """Keep user categoricals instead of silently dropping them before CatBoost."""
+    """Apply the training frame's categorical layout to every model split."""
 
     inputs = frame[feature_columns].copy()
-    categorical_indices: list[int] = []
+    inferred_categorical_indices: list[int] = []
+    frozen_categorical_indices = (
+        None if categorical_indices is None else set(categorical_indices)
+    )
     for index, column in enumerate(feature_columns):
         series = inputs[column]
-        if (
-            pd.api.types.is_object_dtype(series)
-            or pd.api.types.is_string_dtype(series)
-            or pd.api.types.is_categorical_dtype(series)
-        ):
+        is_categorical = (
+            index in frozen_categorical_indices
+            if frozen_categorical_indices is not None
+            else (
+                pd.api.types.is_object_dtype(series)
+                or pd.api.types.is_string_dtype(series)
+                or isinstance(series.dtype, pd.CategoricalDtype)
+            )
+        )
+        if is_categorical:
             inputs[column] = series.fillna("__missing__").astype(str)
-            categorical_indices.append(index)
+            inferred_categorical_indices.append(index)
         else:
             inputs[column] = pd.to_numeric(series, errors="coerce").fillna(0)
-    return inputs, categorical_indices
+    return inputs, inferred_categorical_indices
+
+
+class _FrozenGraphOperations:
+    """Capture one GraphReduce plan and enforce it on every later cutoff."""
+
+    def __init__(self) -> None:
+        self.plan: dict[str, object] | None = None
+        self.feature_columns: tuple[str, ...] | None = None
+        self.source_split: str | None = None
+        self.source_cut_date: pd.Timestamp | None = None
+
+    @property
+    def is_frozen(self) -> bool:
+        return self.plan is not None
+
+    def apply(self, graph: GraphReduce) -> None:
+        if self.plan is not None:
+            graph.apply_execution_plan(self.plan)
+
+    def capture_or_validate(
+        self,
+        graph: GraphReduce,
+        features: pd.DataFrame,
+        *,
+        split_name: str,
+        cut_date: pd.Timestamp,
+    ) -> None:
+        columns = tuple(features.columns)
+        if self.plan is None:
+            plan = graph.freeze_execution_plan()
+            records = plan.get("records", [])
+            if not records:
+                raise RuntimeError("GraphReduce produced an empty execution plan")
+            self.plan = plan
+            self.feature_columns = columns
+            self.source_split = split_name
+            self.source_cut_date = pd.Timestamp(cut_date)
+            print(
+                "frozen_execution_plan: "
+                f"split={split_name} cutoff={pd.Timestamp(cut_date).isoformat()} "
+                f"records={len(records)} features={len(columns)}",
+                flush=True,
+            )
+            return
+
+        assert self.feature_columns is not None
+        if columns == self.feature_columns:
+            return
+        expected = set(self.feature_columns)
+        actual = set(columns)
+        missing = sorted(expected - actual)
+        unexpected = sorted(actual - expected)
+        raise RuntimeError(
+            "Frozen GraphReduce plan produced a different feature schema at "
+            f"{split_name}/{pd.Timestamp(cut_date).isoformat()}: "
+            f"missing={missing}, unexpected={unexpected}, "
+            f"order_changed={not missing and not unexpected}"
+        )
 
 
 def run_rel_event_user_ignore(
@@ -79,6 +146,7 @@ def run_rel_event_user_ignore(
     con = duckdb.connect()
     split_frames: dict[str, RelBenchFrameStore] = {}
     split_tasks = {}
+    frozen_graph_operations = _FrozenGraphOperations()
 
     try:
         register_relbench_db_views(con, db, TABLE_TO_VIEW, ROW_NUMBER_IDS, DROP_COLUMNS)
@@ -222,8 +290,15 @@ def run_rel_event_user_ignore(
                 graph.add_entity_edge(attendees_node, events_node, attendee_event_col, event_id_col, reduce=False)
                 graph.add_entity_edge(interest_node, events_node, interest_event_col, event_id_col, reduce=False)
 
+                frozen_graph_operations.apply(graph)
                 graph.do_transformations_sql()
                 features = con.sql(f"SELECT * FROM {graph.parent_node._cur_data_ref}").to_df().copy()
+                frozen_graph_operations.capture_or_validate(
+                    graph,
+                    features,
+                    split_name=split_name,
+                    cut_date=pd.Timestamp(cut_date),
+                )
                 graph._clean_refs()
                 features["timestamp"] = pd.Timestamp(cut_date)
 
@@ -242,8 +317,20 @@ def run_rel_event_user_ignore(
                 frame[TARGET_COLUMN] = frame[TARGET_COLUMN].astype("int8")
                 return frame
 
+            pending_cut_dates = list(cut_dates)
+            if pending_cut_dates and not frozen_graph_operations.is_frozen:
+                # The planning frame must finish before any parallel workers
+                # can replay the immutable plan.
+                first_cut_date = pending_cut_dates.pop(0)
+                frame_store.append(build_frame(con, first_cut_date))
+
             frame_workers = None if split_name == "train" else 1
-            for frame in iter_training_frames(con, cut_dates, build_frame, workers=frame_workers):
+            for frame in iter_training_frames(
+                con,
+                pending_cut_dates,
+                build_frame,
+                workers=frame_workers,
+            ):
                 frame_store.append(frame)
 
             split_frames[split_name] = frame_store
@@ -256,12 +343,10 @@ def run_rel_event_user_ignore(
     split_frames["val"].close()
     split_frames["test"].close()
     train_sample = train_store.sample_frame()
-    common_columns = set(train_sample.columns) & set(df_val.columns) & set(df_test.columns)
     feature_columns = [
         column
         for column in train_sample.columns
-        if column in common_columns
-        and column != TARGET_COLUMN
+        if column != TARGET_COLUMN
         and "label" not in column.lower()
         and "user_id" not in column.lower()
         and not pd.api.types.is_datetime64_any_dtype(train_sample[column])
@@ -276,13 +361,35 @@ def run_rel_event_user_ignore(
     if not feature_columns or train_store.target_nunique(TARGET_COLUMN) < 2:
         return train_store, df_val, df_test, None, None, len(feature_columns), materialized, TARGET_COLUMN
 
+    for split_name, frame in (("validation", df_val), ("test", df_test)):
+        missing_features = [
+            column for column in feature_columns if column not in frame.columns
+        ]
+        if missing_features:
+            raise RuntimeError(
+                f"{split_name} frame is missing frozen training features: "
+                f"{missing_features}"
+            )
+
     _, categorical_indices = _catboost_inputs(train_sample, feature_columns)
-    val_inputs, _ = _catboost_inputs(df_val, feature_columns)
-    test_inputs, _ = _catboost_inputs(df_test, feature_columns)
+    val_inputs, _ = _catboost_inputs(
+        df_val,
+        feature_columns,
+        categorical_indices,
+    )
+    test_inputs, _ = _catboost_inputs(
+        df_test,
+        feature_columns,
+        categorical_indices,
+    )
 
     def train_batches():
         for batch in train_store.iter_batches():
-            inputs, _ = _catboost_inputs(batch, feature_columns)
+            inputs, _ = _catboost_inputs(
+                batch,
+                feature_columns,
+                categorical_indices,
+            )
             inputs[TARGET_COLUMN] = batch[TARGET_COLUMN].to_numpy()
             yield inputs
 
