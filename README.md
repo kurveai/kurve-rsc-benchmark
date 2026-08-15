@@ -51,6 +51,47 @@ Run the complete v1 benchmark:
 python scripts/run_all.py --task-type v1
 ```
 
+## Leaderboard submissions
+
+Add `--submission-dir` to generate one official-format prediction CSV for
+every task in either the classification or regression leaderboard family:
+
+```bash
+python scripts/run_all.py \
+  --task-type classification \
+  --submission-dir results/submissions/kurve-rsc-classification
+```
+
+Use `--task-type regression` for the regression family. Submission mode
+requires the complete family, so it cannot be combined with `--task` or
+`--match`. Each file is named `<dataset>__<task>.csv`; classification values
+are probabilities and regression values remain on the original target scale.
+The run fails if a freshly generated file does not cover every official test
+key. Normal benchmark runs do not write prediction tables.
+
+Add the required `metadata.yaml` to that directory, following the
+[RelBench submission documentation](https://github.com/stanford-star/relbench/blob/relbench-hf/README.md#submitting-to-the-leaderboard),
+then validate and create the clean upload zip with the official tooling:
+
+```yaml
+name: Kurve-RSC
+type: fine-tuned
+email: maintainer@example.com
+# url and note are optional
+```
+
+```bash
+python -m relbench.leaderboard \
+  results/submissions/kurve-rsc-classification \
+  --package
+```
+
+This benchmark stays on `relbench==2.1.1` because its task adapters use the
+legacy dataset API. The leaderboard module belongs to the newer
+`relbench-hf`/3.x code line, so run the validation command from a separate
+environment that provides `relbench.leaderboard`; do not replace the benchmark
+environment's RelBench dependency.
+
 Training cutoff frames are sequential by default. Bound concurrency explicitly
 on a large machine:
 
@@ -88,23 +129,37 @@ historical training periods.
 
 ## TabPFN
 
-TabPFN is currently supported only for the `rel-trial/site-success` regression
-task. CatBoost remains the default for this task and every other benchmark:
+CatBoost remains the default. Pass `--tabpfn` to use `TabPFNClassifier` for a
+classification task or `TabPFNRegressor` for a regression task:
 
 ```bash
-python scripts/run_task.py relbench_trial_site_success.py \
+python scripts/run_task.py relbench_event_user_ignore.py \
+  --tabpfn
+```
+
+The option is also available on the top-level runner and applies to every
+selected task:
+
+```bash
+python scripts/run_all.py --task-type all \
   --single-train-period \
   --tabpfn
 ```
 
-This uses the local `TabPFNRegressor` from `tabpfn==8.1.0`. On first use,
-TabPFN downloads its model checkpoint and may require accepting the model
-license. For headless runs, set `TABPFN_TOKEN` as described in the
+`--single-train-period` is not required, but it is recommended for TabPFN on
+large tasks because TabPFN materializes the selected training frames into one
+in-memory matrix. Omitting it retains each task's normal multi-cutoff training
+schedule.
+
+This uses `TabPFNClassifier` or `TabPFNRegressor` from `tabpfn==8.1.0`. On
+first use, TabPFN downloads its model checkpoint and may require accepting the
+model license. For headless runs, set `TABPFN_TOKEN` as described in the
 [official TabPFN documentation](https://github.com/PriorLabs/TabPFN#basic-usage).
 
 Reports, logs, and machine-readable results are written to `results/`.
-Individual frames spill to Parquet during multi-cutoff training so CatBoost
-can train incrementally without retaining every frame in RAM.
+Individual frames spill to Parquet during multi-cutoff feature construction.
+CatBoost trains incrementally from those frames; TabPFN combines them before
+fitting.
 
 ## Metrics
 

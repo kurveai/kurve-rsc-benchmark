@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import os
 from math import ceil
 from typing import Any, Callable, Iterable, Iterator, Sequence
 
 import numpy as np
 import pandas as pd
 from catboost import CatBoostClassifier, CatBoostRegressor
+from pandas.api.types import is_numeric_dtype
 from sklearn.metrics import mean_absolute_error, roc_auc_score
 
+
+MODEL_BACKEND_ENV = "KURVE_RSC_MODEL_BACKEND"
+TABPFN_CONFIG = {"name": "tabpfn"}
 
 CLASSIFIER_CONFIGS: tuple[dict[str, Any], ...] = (
     {
@@ -93,6 +98,24 @@ TEMPORAL_FEATURE_FAMILIES = (
 )
 
 
+def selected_model_backend(
+    default: str = "catboost",
+    override: str | None = None,
+) -> str:
+    """Return the requested model backend and reject unsupported values."""
+
+    backend = (
+        override
+        if override is not None
+        else os.environ.get(MODEL_BACKEND_ENV, default)
+    ).strip().lower()
+    if backend not in {"catboost", "tabpfn"}:
+        raise ValueError(
+            f"{MODEL_BACKEND_ENV} must be either 'catboost' or 'tabpfn'"
+        )
+    return backend
+
+
 def enable_all_feature_families(nodes: Iterable[Any]) -> None:
     """Enable every SQL feature family on a graph's nodes."""
 
@@ -120,8 +143,23 @@ def fit_tuned_classifier(
     cat_features: Sequence[int] | None = None,
     auto_class_weights: str | None = None,
     configs: Sequence[dict[str, Any]] = CLASSIFIER_CONFIGS,
-) -> tuple[CatBoostClassifier, dict[str, Any], float]:
+    model_backend: str | None = None,
+) -> tuple[Any, dict[str, Any], float]:
     """Select a classifier by validation AUROC without touching the test split."""
+
+    if selected_model_backend(override=model_backend) == "tabpfn":
+        batch = train_inputs.reindex(columns=list(train_inputs.columns)).copy()
+        target_column = "__tabpfn_target__"
+        batch[target_column] = train_target.to_numpy()
+        model, auc, _ = fit_tabpfn_classifier(
+            lambda: iter([batch]),
+            list(train_inputs.columns),
+            target_column,
+            val_inputs,
+            val_target,
+            cat_features=cat_features,
+        )
+        return model, dict(TABPFN_CONFIG), auc
 
     best_model: CatBoostClassifier | None = None
     best_config: dict[str, Any] | None = None
@@ -170,8 +208,22 @@ def fit_tuned_regressor(
     val_target: pd.Series,
     *,
     configs: Sequence[dict[str, Any]] = REGRESSOR_CONFIGS,
-) -> tuple[CatBoostRegressor, dict[str, Any], float]:
+    model_backend: str | None = None,
+) -> tuple[Any, dict[str, Any], float]:
     """Select a regressor by validation MAE without touching the test split."""
+
+    if selected_model_backend(override=model_backend) == "tabpfn":
+        batch = train_inputs.reindex(columns=list(train_inputs.columns)).copy()
+        target_column = "__tabpfn_target__"
+        batch[target_column] = train_target.to_numpy()
+        model, mae, _ = fit_tabpfn_regressor(
+            lambda: iter([batch]),
+            list(train_inputs.columns),
+            target_column,
+            val_inputs,
+            val_target,
+        )
+        return model, dict(TABPFN_CONFIG), mae
 
     best_model: CatBoostRegressor | None = None
     best_config: dict[str, Any] | None = None
@@ -222,6 +274,158 @@ def prepare_tabpfn_inputs(
     )
 
 
+class _TabPFNPreprocessor:
+    """Encode mixed task frames consistently for TabPFN."""
+
+    def __init__(
+        self,
+        feature_columns: Sequence[str],
+        categorical_maps: dict[str, dict[str, int]],
+    ) -> None:
+        self.feature_columns = tuple(feature_columns)
+        self.categorical_maps = categorical_maps
+        self.categorical_features_indices = [
+            index
+            for index, column in enumerate(self.feature_columns)
+            if column in categorical_maps
+        ]
+
+    @classmethod
+    def fit(
+        cls,
+        frame: pd.DataFrame,
+        feature_columns: Sequence[str],
+        categorical_features_indices: Sequence[int] | None = None,
+    ) -> "_TabPFNPreprocessor":
+        forced_categorical = set(categorical_features_indices or ())
+        categorical_maps: dict[str, dict[str, int]] = {}
+        for index, column in enumerate(feature_columns):
+            series = frame[column]
+            if index not in forced_categorical and is_numeric_dtype(series.dtype):
+                continue
+            values = series.astype("string").dropna().drop_duplicates()
+            categorical_maps[column] = {
+                str(value): category for category, value in enumerate(values)
+            }
+        return cls(feature_columns, categorical_maps)
+
+    def transform(self, frame: pd.DataFrame) -> pd.DataFrame:
+        transformed = pd.DataFrame(index=frame.index)
+        for column in self.feature_columns:
+            if column in frame:
+                series = frame[column]
+            else:
+                series = pd.Series(np.nan, index=frame.index)
+            category_map = self.categorical_maps.get(column)
+            if category_map is None:
+                transformed[column] = pd.to_numeric(series, errors="coerce")
+            else:
+                transformed[column] = series.astype("string").map(category_map)
+        return (
+            transformed.replace([np.inf, -np.inf], np.nan)
+            .astype("float32")
+            .reset_index(drop=True)
+        )
+
+
+class _TabPFNModelAdapter:
+    """Apply the fitted task preprocessor before TabPFN inference."""
+
+    def __init__(self, estimator: Any, preprocessor: _TabPFNPreprocessor) -> None:
+        self.estimator = estimator
+        self.preprocessor = preprocessor
+
+    def predict(self, inputs: pd.DataFrame) -> np.ndarray:
+        return np.asarray(
+            self.estimator.predict(self.preprocessor.transform(inputs))
+        )
+
+    def predict_proba(self, inputs: pd.DataFrame) -> np.ndarray:
+        return np.asarray(
+            self.estimator.predict_proba(self.preprocessor.transform(inputs))
+        )
+
+    def get_best_iteration(self) -> int:
+        """Match the small CatBoost interface used by task diagnostics."""
+
+        return -1
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.estimator, name)
+
+
+def _materialize_tabpfn_training_data(
+    train_batch_factory: Callable[[], Iterator[pd.DataFrame]],
+    feature_columns: Sequence[str],
+    target_column: str,
+) -> tuple[pd.DataFrame, pd.Series]:
+    train_inputs: list[pd.DataFrame] = []
+    train_targets: list[pd.Series] = []
+    for batch in train_batch_factory():
+        if batch.empty:
+            continue
+        train_inputs.append(batch.reindex(columns=list(feature_columns)))
+        train_targets.append(batch[target_column].reset_index(drop=True))
+    if not train_inputs:
+        raise RuntimeError("TabPFN received no training rows")
+    return (
+        pd.concat(train_inputs, ignore_index=True),
+        pd.concat(train_targets, ignore_index=True),
+    )
+
+
+def fit_tabpfn_classifier(
+    train_batch_factory: Callable[[], Iterator[pd.DataFrame]],
+    feature_columns: Sequence[str],
+    target_column: str,
+    val_inputs: pd.DataFrame,
+    val_target: pd.Series,
+    *,
+    cat_features: Sequence[int] | None = None,
+    classifier_factory: Callable[..., Any] | None = None,
+) -> tuple[Any, float, np.ndarray]:
+    """Fit a TabPFN classifier on materialized training batches."""
+
+    print("model_backend: tabpfn", flush=True)
+    raw_train_inputs, train_target = _materialize_tabpfn_training_data(
+        train_batch_factory,
+        feature_columns,
+        target_column,
+    )
+    valid_target = train_target.notna()
+    raw_train_inputs = raw_train_inputs.loc[valid_target].reset_index(drop=True)
+    train_target = train_target.loc[valid_target].reset_index(drop=True)
+    if train_target.nunique(dropna=True) < 2:
+        raise RuntimeError("TabPFN classifier requires at least two target classes")
+
+    preprocessor = _TabPFNPreprocessor.fit(
+        raw_train_inputs,
+        feature_columns,
+        categorical_features_indices=cat_features,
+    )
+    if classifier_factory is None:
+        from tabpfn import TabPFNClassifier
+
+        classifier_factory = TabPFNClassifier
+
+    model_kwargs: dict[str, Any] = {
+        "random_state": 42,
+        "ignore_pretraining_limits": True,
+    }
+    if preprocessor.categorical_features_indices:
+        model_kwargs["categorical_features_indices"] = (
+            preprocessor.categorical_features_indices
+        )
+    estimator = classifier_factory(**model_kwargs)
+    estimator.fit(preprocessor.transform(raw_train_inputs), train_target)
+    model = _TabPFNModelAdapter(estimator, preprocessor)
+    predictions = np.asarray(model.predict_proba(val_inputs)[:, 1], dtype="float64")
+    auc = float(
+        roc_auc_score(val_target.to_numpy(dtype="float64"), predictions)
+    )
+    return model, auc, predictions
+
+
 def fit_tabpfn_regressor(
     train_batch_factory: Callable[[], Iterator[pd.DataFrame]],
     feature_columns: Sequence[str],
@@ -233,35 +437,37 @@ def fit_tabpfn_regressor(
 ) -> tuple[Any, float, np.ndarray]:
     """Fit the local TabPFN regressor on materialized training batches."""
 
-    train_inputs: list[pd.DataFrame] = []
-    train_targets: list[pd.Series] = []
-    for batch in train_batch_factory():
-        if batch.empty:
-            continue
-        train_inputs.append(prepare_tabpfn_inputs(batch, feature_columns))
-        train_targets.append(
-            pd.to_numeric(batch[target_column], errors="coerce")
-            .fillna(0)
-            .astype("float64")
-        )
-    if not train_inputs:
-        raise RuntimeError("TabPFN regressor received no training rows")
+    print("model_backend: tabpfn", flush=True)
+    raw_train_inputs, train_target = _materialize_tabpfn_training_data(
+        train_batch_factory,
+        feature_columns,
+        target_column,
+    )
+    train_target = (
+        pd.to_numeric(train_target, errors="coerce").fillna(0).astype("float64")
+    )
+    preprocessor = _TabPFNPreprocessor.fit(raw_train_inputs, feature_columns)
 
     if regressor_factory is None:
         from tabpfn import TabPFNRegressor
 
         regressor_factory = TabPFNRegressor
 
-    model = regressor_factory(
-        random_state=42,
-        ignore_pretraining_limits=True,
+    model_kwargs: dict[str, Any] = {
+        "random_state": 42,
+        "ignore_pretraining_limits": True,
+    }
+    if preprocessor.categorical_features_indices:
+        model_kwargs["categorical_features_indices"] = (
+            preprocessor.categorical_features_indices
+        )
+    estimator = regressor_factory(
+        **model_kwargs,
     )
-    model.fit(
-        pd.concat(train_inputs, ignore_index=True),
-        pd.concat(train_targets, ignore_index=True),
-    )
+    estimator.fit(preprocessor.transform(raw_train_inputs), train_target)
+    model = _TabPFNModelAdapter(estimator, preprocessor)
     predictions = np.asarray(
-        model.predict(prepare_tabpfn_inputs(val_inputs, feature_columns)),
+        model.predict(val_inputs),
         dtype="float64",
     )
     mae = float(
@@ -296,8 +502,20 @@ def fit_incremental_classifier(
     config: dict[str, Any],
     cat_features: Sequence[int] | None = None,
     auto_class_weights: str | None = None,
-) -> tuple[CatBoostClassifier, float]:
+    model_backend: str | None = None,
+) -> tuple[Any, float]:
     """Fit one CatBoost classifier by continuing across disk-backed batches."""
+
+    if selected_model_backend(override=model_backend) == "tabpfn":
+        model, auc, _ = fit_tabpfn_classifier(
+            train_batch_factory,
+            feature_columns,
+            target_column,
+            val_inputs,
+            val_target,
+            cat_features=cat_features,
+        )
+        return model, auc
 
     iterations = max(1, ceil(int(config["iterations"]) / max(1, batch_count)))
     params = _incremental_model_params(config, "Logloss", iterations)
@@ -335,8 +553,19 @@ def fit_incremental_regressor(
     *,
     batch_count: int,
     config: dict[str, Any],
-) -> tuple[CatBoostRegressor, float]:
+    model_backend: str | None = None,
+) -> tuple[Any, float]:
     """Fit one CatBoost regressor by continuing across disk-backed batches."""
+
+    if selected_model_backend(override=model_backend) == "tabpfn":
+        model, mae, _ = fit_tabpfn_regressor(
+            train_batch_factory,
+            feature_columns,
+            target_column,
+            val_inputs,
+            val_target,
+        )
+        return model, mae
 
     iterations = max(1, ceil(int(config["iterations"]) / max(1, batch_count)))
     params = _incremental_model_params(config, "MAE", iterations)
@@ -378,7 +607,20 @@ def fit_tuned_classifier_incremental(
     cat_features: Sequence[int] | None = None,
     auto_class_weights: str | None = None,
     configs: Sequence[dict[str, Any]] = CLASSIFIER_CONFIGS,
-) -> tuple[CatBoostClassifier, dict[str, Any], float]:
+    model_backend: str | None = None,
+) -> tuple[Any, dict[str, Any], float]:
+    backend = selected_model_backend(override=model_backend)
+    if backend == "tabpfn":
+        model, auc, _ = fit_tabpfn_classifier(
+            train_batch_factory,
+            feature_columns,
+            target_column,
+            val_inputs,
+            val_target,
+            cat_features=cat_features,
+        )
+        return model, dict(TABPFN_CONFIG), auc
+
     best_model: CatBoostClassifier | None = None
     best_config: dict[str, Any] | None = None
     best_auc = float("-inf")
@@ -393,6 +635,7 @@ def fit_tuned_classifier_incremental(
             config=config,
             cat_features=cat_features,
             auto_class_weights=auto_class_weights,
+            model_backend=backend,
         )
         if auc > best_auc:
             best_model, best_config, best_auc = model, config, auc
@@ -410,7 +653,19 @@ def fit_tuned_regressor_incremental(
     *,
     batch_count: int,
     configs: Sequence[dict[str, Any]] = REGRESSOR_CONFIGS,
-) -> tuple[CatBoostRegressor, dict[str, Any], float]:
+    model_backend: str | None = None,
+) -> tuple[Any, dict[str, Any], float]:
+    backend = selected_model_backend(override=model_backend)
+    if backend == "tabpfn":
+        model, mae, _ = fit_tabpfn_regressor(
+            train_batch_factory,
+            feature_columns,
+            target_column,
+            val_inputs,
+            val_target,
+        )
+        return model, dict(TABPFN_CONFIG), mae
+
     best_model: CatBoostRegressor | None = None
     best_config: dict[str, Any] | None = None
     best_mae = float("inf")
@@ -423,6 +678,7 @@ def fit_tuned_regressor_incremental(
             val_target,
             batch_count=batch_count,
             config=config,
+            model_backend=backend,
         )
         if mae < best_mae:
             best_model, best_config, best_mae = model, config, mae

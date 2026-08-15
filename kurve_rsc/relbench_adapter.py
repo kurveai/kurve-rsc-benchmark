@@ -372,11 +372,11 @@ def get_relbench_task(
     """Load a RelBench task through the official task getter."""
 
     try:
-        return get_task(dataset_name, task_name, download=download)
+        task = get_task(dataset_name, task_name, download=download)
     except PermissionError:
         if not download:
             raise
-        return get_task(dataset_name, task_name, download=False)
+        task = get_task(dataset_name, task_name, download=False)
     except ValueError as exc:
         # RelBench validates hosted task archives against the hash shipped in
         # the installed package. If the server republishes an archive before
@@ -387,7 +387,11 @@ def get_relbench_task(
         _download_relbench_archive_without_stale_hash(
             f"{dataset_name}/tasks/{task_name}.zip"
         )
-        return get_task(dataset_name, task_name, download=False)
+        task = get_task(dataset_name, task_name, download=False)
+
+    from kurve_rsc.submission import instrument_task_for_submission
+
+    return instrument_task_for_submission(task, dataset_name, task_name)
 
 
 def _task_split_timestamp(task, split: str) -> pd.Timestamp:

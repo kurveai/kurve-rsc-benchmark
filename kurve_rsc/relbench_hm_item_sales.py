@@ -23,6 +23,10 @@ from relbench_dataset_utils import (
     target_table_from_frame,
 )
 from relbench_regression_metrics import add_nmae
+from relbench_catboost_utils import (
+    fit_tabpfn_regressor,
+    selected_model_backend,
+)
 
 TABLE_NAME_TO_FILENAME = {
     "article": "article.parquet",
@@ -167,22 +171,34 @@ def run_rel_hm_item_sales(
     if not feature_columns:
         return df_train, df_val, df_test, None, None, 0, materialized, target
 
-    model = CatBoostRegressor(
-        iterations=700,
-        depth=8,
-        learning_rate=0.05,
-        loss_function="MAE",
-        eval_metric="MAE",
-        random_seed=42,
-        verbose=50,
-        allow_writing_files=False,
-    )
-    model.fit(
-        df_train[feature_columns].fillna(0),
-        df_train[target].fillna(0).astype("float64"),
-        eval_set=(df_val[feature_columns].fillna(0), df_val[target].fillna(0).astype("float64")),
-        use_best_model=True,
-    )
+    if selected_model_backend() == "tabpfn":
+        model, _, _ = fit_tabpfn_regressor(
+            lambda: iter([df_train]),
+            feature_columns,
+            target,
+            df_val[feature_columns],
+            df_val[target],
+        )
+    else:
+        model = CatBoostRegressor(
+            iterations=700,
+            depth=8,
+            learning_rate=0.05,
+            loss_function="MAE",
+            eval_metric="MAE",
+            random_seed=42,
+            verbose=50,
+            allow_writing_files=False,
+        )
+        model.fit(
+            df_train[feature_columns].fillna(0),
+            df_train[target].fillna(0).astype("float64"),
+            eval_set=(
+                df_val[feature_columns].fillna(0),
+                df_val[target].fillna(0).astype("float64"),
+            ),
+            use_best_model=True,
+        )
 
     val_predictions = model.predict(df_val[feature_columns].fillna(0))
     test_predictions = model.predict(df_test[feature_columns].fillna(0))

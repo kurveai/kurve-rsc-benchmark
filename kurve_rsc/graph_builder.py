@@ -408,6 +408,13 @@ def build_task_split_frame(
     use_all_timestamps: bool = False,
     max_timestamps: int | None = None,
 ) -> tuple[object, Table, pd.DataFrame, pd.Timestamp]:
+    # The normal local Stack runners intentionally evaluate one val/test
+    # timestamp. A leaderboard prediction table must cover every official test
+    # key, so submission mode expands only the test split to its full schedule.
+    if split == "test":
+        from kurve_rsc.submission import submission_dir
+
+        use_all_timestamps = use_all_timestamps or submission_dir() is not None
     if use_all_timestamps:
         task, task_table, cut_timestamps = get_relbench_split_task_table(
             "rel-stack", task_name, split, download=True

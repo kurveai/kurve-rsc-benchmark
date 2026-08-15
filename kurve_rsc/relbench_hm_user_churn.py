@@ -23,6 +23,10 @@ from relbench_dataset_utils import (
 from graphreduce.enum import ComputeLayerEnum, PeriodUnit
 from graphreduce.graph_reduce import GraphReduce
 from graphreduce.node import DuckdbNode
+from relbench_catboost_utils import (
+    fit_tabpfn_classifier,
+    selected_model_backend,
+)
 
 TABLE_NAME_TO_FILENAME = {
     "article": "article.parquet",
@@ -211,23 +215,32 @@ def run_rel_hm_user_churn(
     if not feature_columns or df_train[target].nunique() < 2:
         return df_train, df_val, df_test, None, None, len(feature_columns), materialized, target
 
-    model = CatBoostClassifier(
-        iterations=400,
-        depth=8,
-        learning_rate=0.05,
-        loss_function="Logloss",
-        eval_metric="AUC",
-        random_seed=42,
-        verbose=50,
-        allow_writing_files=False,
-    )
-    model.fit(
-        df_train[feature_columns].fillna(0),
-        df_train[target],
-        eval_set=(df_val[feature_columns].fillna(0), df_val[target]),
-        use_best_model=True,
-        verbose=50,
-    )
+    if selected_model_backend() == "tabpfn":
+        model, _, _ = fit_tabpfn_classifier(
+            lambda: iter([df_train]),
+            feature_columns,
+            target,
+            df_val[feature_columns],
+            df_val[target],
+        )
+    else:
+        model = CatBoostClassifier(
+            iterations=400,
+            depth=8,
+            learning_rate=0.05,
+            loss_function="Logloss",
+            eval_metric="AUC",
+            random_seed=42,
+            verbose=50,
+            allow_writing_files=False,
+        )
+        model.fit(
+            df_train[feature_columns].fillna(0),
+            df_train[target],
+            eval_set=(df_val[feature_columns].fillna(0), df_val[target]),
+            use_best_model=True,
+            verbose=50,
+        )
 
     val_predictions = model.predict_proba(df_val[feature_columns].fillna(0))[:, 1]
     test_predictions = model.predict_proba(df_test[feature_columns].fillna(0))[:, 1]

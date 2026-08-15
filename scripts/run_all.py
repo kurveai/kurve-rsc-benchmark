@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -17,6 +18,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 TASK_DIR = PROJECT_ROOT / "kurve_rsc"
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "results" / "run_reports"
 SINGLE_TRAIN_PERIOD_ENV = "RELBENCH_SINGLE_TRAIN_PERIOD"
+MODEL_BACKEND_ENV = "KURVE_RSC_MODEL_BACKEND"
+SUBMISSION_DIR_ENV = "KURVE_RSC_SUBMISSION_DIR"
 
 CLASSIFICATION_TASKS = (
     "relbench_amazon_user_churn.py",
@@ -48,6 +51,29 @@ TASK_GROUPS = {
     "regression": REGRESSION_TASKS,
     "v1": CLASSIFICATION_TASKS + REGRESSION_TASKS,
     "all": CLASSIFICATION_TASKS + REGRESSION_TASKS,
+}
+SUBMISSION_TASK_NAMES = {
+    "relbench_amazon_user_churn.py": "rel-amazon/user-churn",
+    "relbench_amazon_item_churn.py": "rel-amazon/item-churn",
+    "relbench_avito_user_visits.py": "rel-avito/user-visits",
+    "relbench_avito_user_clicks.py": "rel-avito/user-clicks",
+    "relbench_event_user_repeat.py": "rel-event/user-repeat",
+    "relbench_event_user_ignore.py": "rel-event/user-ignore",
+    "relbench_f1_driver_dnf.py": "rel-f1/driver-dnf",
+    "relbench_f1_driver_top3.py": "rel-f1/driver-top3",
+    "relbench_hm_user_churn.py": "rel-hm/user-churn",
+    "relbench_user_engagement_local_runner.py": "rel-stack/user-engagement",
+    "relbench_user_badges_local_runner.py": "rel-stack/user-badge",
+    "relbench_trial_study_outcome.py": "rel-trial/study-outcome",
+    "relbench_amazon_user_ltv.py": "rel-amazon/user-ltv",
+    "relbench_amazon_item_ltv.py": "rel-amazon/item-ltv",
+    "relbench_avito_ad_ctr.py": "rel-avito/ad-ctr",
+    "relbench_event_user_attendance.py": "rel-event/user-attendance",
+    "relbench_f1_driver_position.py": "rel-f1/driver-position",
+    "relbench_hm_item_sales.py": "rel-hm/item-sales",
+    "relbench_post_votes_local_runner.py": "rel-stack/post-votes",
+    "relbench_trial_study_adverse.py": "rel-trial/study-adverse",
+    "relbench_trial_site_success.py": "rel-trial/site-success",
 }
 
 
@@ -96,6 +122,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "(validation timestamp minus that task's label period)."
         ),
     )
+    parser.add_argument(
+        "--tabpfn",
+        action="store_true",
+        help=(
+            "Use TabPFNClassifier or TabPFNRegressor instead of CatBoost for "
+            "every selected task."
+        ),
+    )
+    parser.add_argument(
+        "--submission-dir",
+        type=Path,
+        help=(
+            "Also write official-format prediction CSVs to this directory. "
+            "Requires a complete classification or regression task family."
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args(argv)
 
@@ -111,12 +153,53 @@ def selected_tasks(args: argparse.Namespace) -> list[str]:
     return tasks
 
 
+def submission_path(args: argparse.Namespace) -> Path | None:
+    if args.submission_dir is None:
+        return None
+    if args.task_type not in {"classification", "regression"}:
+        raise SystemExit(
+            "--submission-dir requires --task-type classification or regression"
+        )
+    if args.task or args.match:
+        raise SystemExit(
+            "--submission-dir requires every task in the selected family; "
+            "--task and --match cannot be used"
+        )
+    path = args.submission_dir
+    return path.resolve() if path.is_absolute() else (PROJECT_ROOT / path).resolve()
+
+
+def expected_submission_filenames(task_type: str) -> set[str]:
+    return {
+        f"{SUBMISSION_TASK_NAMES[task].replace('/', '__')}.csv"
+        for task in TASK_GROUPS[task_type]
+    }
+
+
+def prepare_submission_dir(path: Path, task_type: str) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    expected = expected_submission_filenames(task_type)
+    unexpected = sorted(
+        csv.name for csv in path.glob("*.csv") if csv.name not in expected
+    )
+    if unexpected:
+        raise SystemExit(
+            f"submission directory contains CSVs outside the {task_type} family: "
+            f"{unexpected}"
+        )
+
+
 def run_task(task_name: str, args: argparse.Namespace, log_path: Path) -> dict[str, object]:
     started = time.perf_counter()
     started_at = datetime.now(timezone.utc).isoformat()
     env = os.environ.copy()
     env["RELBench_TRAINING_FRAME_WORKERS"] = args.training_frame_workers
     env[SINGLE_TRAIN_PERIOD_ENV] = "1" if args.single_train_period else "0"
+    env[MODEL_BACKEND_ENV] = "tabpfn" if args.tabpfn else "catboost"
+    if args.submission_dir is not None:
+        env[SUBMISSION_DIR_ENV] = str(args.submission_dir)
+    else:
+        env.pop(SUBMISSION_DIR_ENV, None)
     env["PYTHONUNBUFFERED"] = "1"
     env["PYTHONPATH"] = os.pathsep.join(
         [str(TASK_DIR), str(PROJECT_ROOT), env.get("PYTHONPATH", "")]
@@ -143,6 +226,8 @@ def run_task(task_name: str, args: argparse.Namespace, log_path: Path) -> dict[s
                 stripped.startswith(prefix)
                 for prefix in (
                     "single_train_cut_date:",
+                    "model_backend:",
+                    "submission_prediction:",
                     "validation_metrics:",
                     "test_metrics:",
                     "validation_nmae:",
@@ -160,6 +245,9 @@ def run_task(task_name: str, args: argparse.Namespace, log_path: Path) -> dict[s
         "started_at_utc": started_at,
         "log_path": str(log_path.relative_to(PROJECT_ROOT)),
         "highlights": highlights,
+        "submission_written": any(
+            highlight.startswith("submission_prediction:") for highlight in highlights
+        ),
     }
 
 
@@ -168,10 +256,14 @@ def write_report(
     output_dir: Path,
     task_type: str,
     single_train_period: bool = False,
+    model_backend: str = "catboost",
+    submission_dir: Path | None = None,
 ) -> None:
     payload = {
         "task_type": task_type,
         "single_train_period": single_train_period,
+        "model_backend": model_backend,
+        "submission_dir": str(submission_dir) if submission_dir is not None else None,
         "task_count": len(results),
         "passed_count": sum(result["status"] == "passed" for result in results),
         "failed_count": sum(result["status"] == "failed" for result in results),
@@ -184,6 +276,8 @@ def write_report(
         "",
         f"- Task type: `{task_type}`",
         f"- Single train period: `{single_train_period}`",
+        f"- Model backend: `{model_backend}`",
+        f"- Submission directory: `{submission_dir or 'disabled'}`",
         f"- Passed: `{payload['passed_count']}`",
         f"- Failed: `{payload['failed_count']}`",
         "",
@@ -200,6 +294,8 @@ def write_report(
 
 def main() -> int:
     args = parse_args()
+    resolved_submission_dir = submission_path(args)
+    args.submission_dir = resolved_submission_dir
     tasks = selected_tasks(args)
     if not tasks:
         raise SystemExit("no tasks matched")
@@ -207,9 +303,16 @@ def main() -> int:
         print("\n".join(tasks))
         return 0
 
+    if resolved_submission_dir is not None:
+        prepare_submission_dir(resolved_submission_dir, args.task_type)
+
     print(f"Running {len(tasks)} Kurve-RSC RelBench v1 task(s)", flush=True)
     print(f"Training frame workers: {args.training_frame_workers}", flush=True)
     print(f"Single train period: {args.single_train_period}", flush=True)
+    model_backend = "tabpfn" if args.tabpfn else "catboost"
+    print(f"Model backend: {model_backend}", flush=True)
+    if resolved_submission_dir is not None:
+        print(f"Submission directory: {resolved_submission_dir}", flush=True)
     results: list[dict[str, object]] = []
     for index, task_name in enumerate(tasks, start=1):
         print(f"[{index}/{len(tasks)}] starting {task_name}", flush=True)
@@ -222,8 +325,42 @@ def main() -> int:
         )
         if args.stop_on_error and result["status"] == "failed":
             break
-    write_report(results, args.output_dir, args.task_type, args.single_train_period)
-    return 0 if all(result["status"] == "passed" for result in results) else 1
+    write_report(
+        results,
+        args.output_dir,
+        args.task_type,
+        args.single_train_period,
+        model_backend,
+        resolved_submission_dir,
+    )
+    passed = all(result["status"] == "passed" for result in results)
+    if resolved_submission_dir is not None:
+        written = {
+            SUBMISSION_TASK_NAMES[task]
+            for task, result in zip(tasks, results)
+            if result["submission_written"]
+        }
+        expected = {SUBMISSION_TASK_NAMES[task] for task in tasks}
+        missing = sorted(expected - written)
+        if missing:
+            print(
+                "Submission is incomplete; no package should be created. "
+                f"Missing freshly generated predictions for: {missing}",
+                flush=True,
+            )
+            passed = False
+        elif passed:
+            quoted_dir = shlex.quote(str(resolved_submission_dir))
+            print("Submission prediction tables are complete.", flush=True)
+            print(
+                "Validate and package them with the RelBench leaderboard tooling:",
+                flush=True,
+            )
+            print(
+                f"python -m relbench.leaderboard {quoted_dir} --package",
+                flush=True,
+            )
+    return 0 if passed else 1
 
 
 if __name__ == "__main__":

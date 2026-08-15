@@ -70,7 +70,14 @@ def test_single_train_period_is_available_on_both_clis():
 
 
 def test_top_level_report_records_single_train_period(tmp_path):
-    write_report([], tmp_path, "v1", single_train_period=True)
+    write_report(
+        [],
+        tmp_path,
+        "v1",
+        single_train_period=True,
+        model_backend="tabpfn",
+    )
 
     payload = json.loads((tmp_path / "relbench_results.json").read_text())
     assert payload["single_train_period"] is True
+    assert payload["model_backend"] == "tabpfn"

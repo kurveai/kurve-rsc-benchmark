@@ -14,7 +14,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 TASK_DIR = PROJECT_ROOT / "kurve_rsc"
 SINGLE_TRAIN_PERIOD_ENV = "RELBENCH_SINGLE_TRAIN_PERIOD"
 MODEL_BACKEND_ENV = "KURVE_RSC_MODEL_BACKEND"
-TABPFN_TASK = "relbench_trial_site_success.py"
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -47,8 +46,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--tabpfn",
         action="store_true",
         help=(
-            "Use TabPFN instead of CatBoost. Currently supported only for "
-            "relbench_trial_site_success.py with --single-train-period."
+            "Use TabPFNClassifier or TabPFNRegressor instead of CatBoost, "
+            "according to the selected task type."
         ),
     )
     return parser
@@ -66,11 +65,6 @@ def main() -> int:
     task_path = TASK_DIR / task_name
     if not task_path.is_file():
         parser.error(f"unknown task script: {task_name}")
-    if args.tabpfn and task_name != TABPFN_TASK:
-        parser.error(f"--tabpfn is currently supported only for {TABPFN_TASK}")
-    if args.tabpfn and not args.single_train_period:
-        parser.error("--tabpfn currently requires --single-train-period")
-
     os.environ["RELBench_TRAINING_FRAME_WORKERS"] = str(args.training_frame_workers)
     os.environ[SINGLE_TRAIN_PERIOD_ENV] = "1" if args.single_train_period else "0"
     os.environ[MODEL_BACKEND_ENV] = "tabpfn" if args.tabpfn else "catboost"

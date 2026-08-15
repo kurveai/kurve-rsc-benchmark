@@ -34,7 +34,7 @@ from relbench_catboost_utils import (
     TEMPORAL_FEATURE_FAMILIES,
     fit_tabpfn_regressor,
     fit_tuned_regressor_incremental,
-    prepare_tabpfn_inputs,
+    selected_model_backend,
     set_feature_families,
 )
 
@@ -664,12 +664,9 @@ def run_rel_trial_regression_task(
     feature_entity_col: str,
     data_dir: Path | None = None,
     max_train_frames: int | None = None,
-    model_backend: str = "catboost",
+    model_backend: str | None = None,
 ) -> tuple[RelBenchFrameStore, pd.DataFrame, pd.DataFrame, dict[str, float] | None, dict[str, float] | None, int, list[str], str]:
-    if model_backend not in {"catboost", "tabpfn"}:
-        raise ValueError(f"Unknown model backend: {model_backend}")
-    if model_backend == "tabpfn" and task_name != "site-success":
-        raise ValueError("TabPFN is currently supported only for rel-trial/site-success")
+    model_backend = selected_model_backend(override=model_backend)
     materialized: list[str] = []
 
     con = duckdb.connect()
@@ -732,7 +729,7 @@ def run_rel_trial_regression_task(
             flush=True,
         )
         print("tabpfn_validation_mae:", best_val_mae, flush=True)
-        test_inputs = prepare_tabpfn_inputs(df_test, feature_columns)
+        test_inputs = df_test[feature_columns]
     else:
         model, best_config, best_val_mae = fit_tuned_regressor_incremental(
             train_batches,
@@ -741,6 +738,7 @@ def run_rel_trial_regression_task(
             df_val[feature_columns].fillna(0),
             df_val[target].astype("float64"),
             batch_count=len(train_store.part_paths),
+            model_backend=model_backend,
         )
         print("catboost_config:", best_config, flush=True)
         print("catboost_validation_mae:", best_val_mae, flush=True)
