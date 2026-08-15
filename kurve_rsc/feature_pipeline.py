@@ -14,6 +14,7 @@ from sklearn.metrics import mean_absolute_error, roc_auc_score
 
 
 MODEL_BACKEND_ENV = "KURVE_RSC_MODEL_BACKEND"
+TRAIN_ALL_AT_ONCE_ENV = "KURVE_RSC_TRAIN_ALL_AT_ONCE"
 TABPFN_CONFIG = {"name": "tabpfn"}
 
 CLASSIFIER_CONFIGS: tuple[dict[str, Any], ...] = (
@@ -114,6 +115,19 @@ def selected_model_backend(
             f"{MODEL_BACKEND_ENV} must be either 'catboost' or 'tabpfn'"
         )
     return backend
+
+
+def train_all_at_once_enabled(override: bool | None = None) -> bool:
+    """Return whether disk-backed training frames should be fit jointly."""
+
+    if override is not None:
+        return bool(override)
+    raw_value = os.environ.get(TRAIN_ALL_AT_ONCE_ENV, "0").strip().lower()
+    if raw_value in {"1", "true", "yes", "on"}:
+        return True
+    if raw_value in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{TRAIN_ALL_AT_ONCE_ENV} must be a boolean value")
 
 
 def enable_all_feature_families(nodes: Iterable[Any]) -> None:
@@ -503,10 +517,15 @@ def fit_incremental_classifier(
     cat_features: Sequence[int] | None = None,
     auto_class_weights: str | None = None,
     model_backend: str | None = None,
+    train_all_at_once: bool | None = None,
+    _report_training_mode: bool = True,
 ) -> tuple[Any, float]:
-    """Fit one CatBoost classifier by continuing across disk-backed batches."""
+    """Fit one classifier jointly or by continuing across disk-backed batches."""
 
-    if selected_model_backend(override=model_backend) == "tabpfn":
+    backend = selected_model_backend(override=model_backend)
+    if backend == "tabpfn":
+        if _report_training_mode:
+            print("training_mode: all_at_once", flush=True)
         model, auc, _ = fit_tabpfn_classifier(
             train_batch_factory,
             feature_columns,
@@ -516,6 +535,29 @@ def fit_incremental_classifier(
             cat_features=cat_features,
         )
         return model, auc
+
+    if train_all_at_once_enabled(train_all_at_once):
+        if _report_training_mode:
+            print("training_mode: all_at_once", flush=True)
+        train_inputs, train_target = _materialize_tabpfn_training_data(
+            train_batch_factory,
+            feature_columns,
+            target_column,
+        )
+        model, _, auc = fit_tuned_classifier(
+            train_inputs,
+            train_target,
+            val_inputs,
+            val_target,
+            cat_features=cat_features,
+            auto_class_weights=auto_class_weights,
+            configs=(config,),
+            model_backend=backend,
+        )
+        return model, auc
+
+    if _report_training_mode:
+        print("training_mode: incremental", flush=True)
 
     iterations = max(1, ceil(int(config["iterations"]) / max(1, batch_count)))
     params = _incremental_model_params(config, "Logloss", iterations)
@@ -554,10 +596,15 @@ def fit_incremental_regressor(
     batch_count: int,
     config: dict[str, Any],
     model_backend: str | None = None,
+    train_all_at_once: bool | None = None,
+    _report_training_mode: bool = True,
 ) -> tuple[Any, float]:
-    """Fit one CatBoost regressor by continuing across disk-backed batches."""
+    """Fit one regressor jointly or by continuing across disk-backed batches."""
 
-    if selected_model_backend(override=model_backend) == "tabpfn":
+    backend = selected_model_backend(override=model_backend)
+    if backend == "tabpfn":
+        if _report_training_mode:
+            print("training_mode: all_at_once", flush=True)
         model, mae, _ = fit_tabpfn_regressor(
             train_batch_factory,
             feature_columns,
@@ -566,6 +613,27 @@ def fit_incremental_regressor(
             val_target,
         )
         return model, mae
+
+    if train_all_at_once_enabled(train_all_at_once):
+        if _report_training_mode:
+            print("training_mode: all_at_once", flush=True)
+        train_inputs, train_target = _materialize_tabpfn_training_data(
+            train_batch_factory,
+            feature_columns,
+            target_column,
+        )
+        model, _, mae = fit_tuned_regressor(
+            train_inputs,
+            train_target,
+            val_inputs,
+            val_target,
+            configs=(config,),
+            model_backend=backend,
+        )
+        return model, mae
+
+    if _report_training_mode:
+        print("training_mode: incremental", flush=True)
 
     iterations = max(1, ceil(int(config["iterations"]) / max(1, batch_count)))
     params = _incremental_model_params(config, "MAE", iterations)
@@ -608,9 +676,11 @@ def fit_tuned_classifier_incremental(
     auto_class_weights: str | None = None,
     configs: Sequence[dict[str, Any]] = CLASSIFIER_CONFIGS,
     model_backend: str | None = None,
+    train_all_at_once: bool | None = None,
 ) -> tuple[Any, dict[str, Any], float]:
     backend = selected_model_backend(override=model_backend)
     if backend == "tabpfn":
+        print("training_mode: all_at_once", flush=True)
         model, auc, _ = fit_tabpfn_classifier(
             train_batch_factory,
             feature_columns,
@@ -621,6 +691,25 @@ def fit_tuned_classifier_incremental(
         )
         return model, dict(TABPFN_CONFIG), auc
 
+    if train_all_at_once_enabled(train_all_at_once):
+        print("training_mode: all_at_once", flush=True)
+        train_inputs, train_target = _materialize_tabpfn_training_data(
+            train_batch_factory,
+            feature_columns,
+            target_column,
+        )
+        return fit_tuned_classifier(
+            train_inputs,
+            train_target,
+            val_inputs,
+            val_target,
+            cat_features=cat_features,
+            auto_class_weights=auto_class_weights,
+            configs=configs,
+            model_backend=backend,
+        )
+
+    print("training_mode: incremental", flush=True)
     best_model: CatBoostClassifier | None = None
     best_config: dict[str, Any] | None = None
     best_auc = float("-inf")
@@ -636,6 +725,8 @@ def fit_tuned_classifier_incremental(
             cat_features=cat_features,
             auto_class_weights=auto_class_weights,
             model_backend=backend,
+            train_all_at_once=False,
+            _report_training_mode=False,
         )
         if auc > best_auc:
             best_model, best_config, best_auc = model, config, auc
@@ -654,9 +745,11 @@ def fit_tuned_regressor_incremental(
     batch_count: int,
     configs: Sequence[dict[str, Any]] = REGRESSOR_CONFIGS,
     model_backend: str | None = None,
+    train_all_at_once: bool | None = None,
 ) -> tuple[Any, dict[str, Any], float]:
     backend = selected_model_backend(override=model_backend)
     if backend == "tabpfn":
+        print("training_mode: all_at_once", flush=True)
         model, mae, _ = fit_tabpfn_regressor(
             train_batch_factory,
             feature_columns,
@@ -666,6 +759,23 @@ def fit_tuned_regressor_incremental(
         )
         return model, dict(TABPFN_CONFIG), mae
 
+    if train_all_at_once_enabled(train_all_at_once):
+        print("training_mode: all_at_once", flush=True)
+        train_inputs, train_target = _materialize_tabpfn_training_data(
+            train_batch_factory,
+            feature_columns,
+            target_column,
+        )
+        return fit_tuned_regressor(
+            train_inputs,
+            train_target,
+            val_inputs,
+            val_target,
+            configs=configs,
+            model_backend=backend,
+        )
+
+    print("training_mode: incremental", flush=True)
     best_model: CatBoostRegressor | None = None
     best_config: dict[str, Any] | None = None
     best_mae = float("inf")
@@ -679,6 +789,8 @@ def fit_tuned_regressor_incremental(
             batch_count=batch_count,
             config=config,
             model_backend=backend,
+            train_all_at_once=False,
+            _report_training_mode=False,
         )
         if mae < best_mae:
             best_model, best_config, best_mae = model, config, mae

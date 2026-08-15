@@ -105,18 +105,34 @@ Each worker receives its own DuckDB cursor and source tables are materialized
 when needed to avoid temporary-table collisions.
 
 Long-running `rel-stack` tasks emit `feature_frame_progress` lines for every
-cutoff, including elapsed time when a frame finishes. In particular,
-`rel-stack/user-engagement` builds 46 historical training frames in the full
-schedule, so a run can spend several minutes between the top-level task start
-and finish messages even when it is making progress.
+cutoff, including elapsed time when a frame finishes. The three Stack runners
+use 15 training cutoffs instead of all 46: 14 are selected reproducibly from
+chronological strata and the most recent training cutoff is always retained.
+Validation and test schedules are not sampled.
 
 `rel-event/user-ignore` plans its GraphReduce operations on the first training
 cutoff and replays that frozen plan for all later training, validation, and test
-graphs. It also enforces the first graph's feature order and categorical layout,
-so later cutoffs cannot silently change the model inputs.
+graphs. Before fitting, it selects only feature columns present in every
+training, validation, and test cutoff, so cutoff-specific columns cannot enter
+the model.
 
-By default, tasks retain their complete historical training schedule. To use
-only one training label period for a task:
+CatBoost continues training across cutoff frames by default to bound peak
+memory. To materialize all selected training frames and fit each candidate
+configuration jointly with validation-based early stopping, pass:
+
+```bash
+python scripts/run_task.py relbench_event_user_ignore.py \
+  --train-all-at-once
+```
+
+The flag is also supported by `scripts/run_all.py` and applies to every task
+that uses the incremental CatBoost helpers. Joint fitting can consume much more
+memory on the largest tasks. Use `--no-train-all-at-once` or omit the flag to
+retain incremental training.
+
+Apart from the bounded Stack schedule above, tasks retain their complete
+historical training schedule by default. To use only one training label period
+for a task:
 
 ```bash
 python scripts/run_task.py relbench_event_user_ignore.py \

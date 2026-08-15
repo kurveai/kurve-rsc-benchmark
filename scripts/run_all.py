@@ -19,6 +19,7 @@ TASK_DIR = PROJECT_ROOT / "kurve_rsc"
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "results" / "run_reports"
 SINGLE_TRAIN_PERIOD_ENV = "RELBENCH_SINGLE_TRAIN_PERIOD"
 MODEL_BACKEND_ENV = "KURVE_RSC_MODEL_BACKEND"
+TRAIN_ALL_AT_ONCE_ENV = "KURVE_RSC_TRAIN_ALL_AT_ONCE"
 SUBMISSION_DIR_ENV = "KURVE_RSC_SUBMISSION_DIR"
 
 CLASSIFICATION_TASKS = (
@@ -131,6 +132,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--train-all-at-once",
+        action=argparse.BooleanOptionalAction,
+        default=_env_flag(TRAIN_ALL_AT_ONCE_ENV),
+        help=(
+            "Materialize all training frames and fit CatBoost jointly instead "
+            "of continuing the model one frame at a time."
+        ),
+    )
+    parser.add_argument(
         "--submission-dir",
         type=Path,
         help=(
@@ -196,6 +206,7 @@ def run_task(task_name: str, args: argparse.Namespace, log_path: Path) -> dict[s
     env["RELBench_TRAINING_FRAME_WORKERS"] = args.training_frame_workers
     env[SINGLE_TRAIN_PERIOD_ENV] = "1" if args.single_train_period else "0"
     env[MODEL_BACKEND_ENV] = "tabpfn" if args.tabpfn else "catboost"
+    env[TRAIN_ALL_AT_ONCE_ENV] = "1" if args.train_all_at_once else "0"
     if args.submission_dir is not None:
         env[SUBMISSION_DIR_ENV] = str(args.submission_dir)
     else:
@@ -230,6 +241,7 @@ def run_task(task_name: str, args: argparse.Namespace, log_path: Path) -> dict[s
                     "single_train_cut_date:",
                     "frozen_execution_plan:",
                     "model_backend:",
+                    "training_mode:",
                     "submission_prediction:",
                     "validation_metrics:",
                     "test_metrics:",
@@ -260,12 +272,14 @@ def write_report(
     task_type: str,
     single_train_period: bool = False,
     model_backend: str = "catboost",
+    train_all_at_once: bool = False,
     submission_dir: Path | None = None,
 ) -> None:
     payload = {
         "task_type": task_type,
         "single_train_period": single_train_period,
         "model_backend": model_backend,
+        "train_all_at_once": train_all_at_once,
         "submission_dir": str(submission_dir) if submission_dir is not None else None,
         "task_count": len(results),
         "passed_count": sum(result["status"] == "passed" for result in results),
@@ -280,6 +294,7 @@ def write_report(
         f"- Task type: `{task_type}`",
         f"- Single train period: `{single_train_period}`",
         f"- Model backend: `{model_backend}`",
+        f"- Train all at once: `{train_all_at_once}`",
         f"- Submission directory: `{submission_dir or 'disabled'}`",
         f"- Passed: `{payload['passed_count']}`",
         f"- Failed: `{payload['failed_count']}`",
@@ -314,6 +329,7 @@ def main() -> int:
     print(f"Single train period: {args.single_train_period}", flush=True)
     model_backend = "tabpfn" if args.tabpfn else "catboost"
     print(f"Model backend: {model_backend}", flush=True)
+    print(f"Train all at once: {args.train_all_at_once}", flush=True)
     if resolved_submission_dir is not None:
         print(f"Submission directory: {resolved_submission_dir}", flush=True)
     results: list[dict[str, object]] = []
@@ -334,6 +350,7 @@ def main() -> int:
         args.task_type,
         args.single_train_period,
         model_backend,
+        args.train_all_at_once,
         resolved_submission_dir,
     )
     passed = all(result["status"] == "passed" for result in results)

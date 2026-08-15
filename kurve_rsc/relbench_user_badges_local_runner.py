@@ -6,6 +6,7 @@ from __future__ import annotations
 import duckdb
 
 from relbench_stack_task_utils import (
+    STACK_TRAIN_FRAME_LIMIT,
     build_task_split_frame,
     build_user_badge_features,
     materialize_rel_stack,
@@ -30,6 +31,7 @@ def main() -> None:
         feature_builder=build_user_badge_features,
         feature_entity_col="user_Id",
         use_all_timestamps=True,
+        max_timestamps=STACK_TRAIN_FRAME_LIMIT,
     )
     _, _, val_store, val_cut_date = build_task_split_frame(
         con,

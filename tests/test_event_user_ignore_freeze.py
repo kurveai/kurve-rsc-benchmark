@@ -4,7 +4,6 @@ import sys
 from pathlib import Path
 
 import pandas as pd
-import pytest
 
 
 TASK_DIR = Path(__file__).resolve().parents[1] / "kurve_rsc"
@@ -14,6 +13,7 @@ if str(TASK_DIR) not in sys.path:
 from relbench_event_user_ignore import (  # noqa: E402
     _FrozenGraphOperations,
     _catboost_inputs,
+    _columns_present_in_all_frames,
 )
 
 
@@ -29,14 +29,14 @@ class FakeGraph:
         self.applied_plans.append(plan)
 
 
-def test_first_graph_plan_is_replayed_and_schema_checked() -> None:
+def test_first_graph_plan_is_replayed_without_freezing_feature_schema() -> None:
     operations = _FrozenGraphOperations()
     first_graph = FakeGraph()
     first_features = pd.DataFrame({"entity": [1], "feature": [2.0]})
 
     operations.apply(first_graph)
     assert first_graph.applied_plans == []
-    operations.capture_or_validate(
+    operations.capture(
         first_graph,
         first_features,
         split_name="train",
@@ -46,20 +46,23 @@ def test_first_graph_plan_is_replayed_and_schema_checked() -> None:
     later_graph = FakeGraph()
     operations.apply(later_graph)
     assert later_graph.applied_plans == [first_graph.frozen_plan]
-    operations.capture_or_validate(
+    operations.capture(
         later_graph,
-        first_features.copy(),
+        pd.DataFrame({"entity": [1], "other_feature": [3.0]}),
         split_name="test",
         cut_date=pd.Timestamp("2020-03-01"),
     )
 
-    with pytest.raises(RuntimeError, match="different feature schema"):
-        operations.capture_or_validate(
-            later_graph,
-            pd.DataFrame({"entity": [1], "other_feature": [3.0]}),
-            split_name="test",
-            cut_date=pd.Timestamp("2020-03-01"),
-        )
+
+def test_model_columns_are_present_in_every_dataframe() -> None:
+    frames = [
+        pd.DataFrame({"first": [1], "shared": [2], "train_only": [3]}),
+        pd.DataFrame({"first": [4], "shared": [5], "later_train_only": [6]}),
+        pd.DataFrame({"first": [7], "shared": [8], "validation_only": [9]}),
+        pd.DataFrame({"first": [10], "shared": [11], "test_only": [12]}),
+    ]
+
+    assert _columns_present_in_all_frames(frames) == ["first", "shared"]
 
 
 def test_training_categorical_layout_is_frozen_for_later_splits() -> None:

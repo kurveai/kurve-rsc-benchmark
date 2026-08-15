@@ -14,6 +14,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 TASK_DIR = PROJECT_ROOT / "kurve_rsc"
 SINGLE_TRAIN_PERIOD_ENV = "RELBENCH_SINGLE_TRAIN_PERIOD"
 MODEL_BACKEND_ENV = "KURVE_RSC_MODEL_BACKEND"
+TRAIN_ALL_AT_ONCE_ENV = "KURVE_RSC_TRAIN_ALL_AT_ONCE"
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -50,6 +51,15 @@ def build_parser() -> argparse.ArgumentParser:
             "according to the selected task type."
         ),
     )
+    parser.add_argument(
+        "--train-all-at-once",
+        action=argparse.BooleanOptionalAction,
+        default=_env_flag(TRAIN_ALL_AT_ONCE_ENV),
+        help=(
+            "Materialize all training frames and fit CatBoost jointly instead "
+            "of continuing the model one frame at a time."
+        ),
+    )
     return parser
 
 
@@ -68,6 +78,7 @@ def main() -> int:
     os.environ["RELBench_TRAINING_FRAME_WORKERS"] = str(args.training_frame_workers)
     os.environ[SINGLE_TRAIN_PERIOD_ENV] = "1" if args.single_train_period else "0"
     os.environ[MODEL_BACKEND_ENV] = "tabpfn" if args.tabpfn else "catboost"
+    os.environ[TRAIN_ALL_AT_ONCE_ENV] = "1" if args.train_all_at_once else "0"
     sys.path.insert(0, str(TASK_DIR))
     sys.argv = [str(task_path)]
     runpy.run_path(str(task_path), run_name="__main__")

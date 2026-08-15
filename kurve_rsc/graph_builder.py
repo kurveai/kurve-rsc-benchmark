@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import datetime
+import random
 import time
 from pathlib import Path
 from typing import Callable
@@ -38,6 +39,40 @@ STACK_TABLE_NAME_TO_FILENAME = {
     "comments": "Comments.csv",
 }
 USER_BADGE_TS_PERIODS = [7, 30, 90, 180, 365, 730, 1825, 3650]
+STACK_TRAIN_FRAME_LIMIT = 15
+STACK_TIMESTAMP_SAMPLE_SEED = 42
+
+
+def _select_randomly_spaced_timestamps(
+    timestamps: list[object],
+    limit: int,
+    *,
+    seed: int = STACK_TIMESTAMP_SAMPLE_SEED,
+) -> list[object]:
+    """Select reproducible samples across the schedule and retain its end."""
+
+    values = list(timestamps)
+    if limit < 1:
+        raise ValueError("timestamp limit must be positive")
+    if len(values) <= limit:
+        return values
+    if limit == 1:
+        return [values[-1]]
+
+    # Draw one cutoff from each chronological stratum. This retains broad
+    # historical coverage without allowing a random sample to cluster in one
+    # part of the schedule. Always keep the latest training cutoff because it
+    # is the closest available distribution to validation and test.
+    rng = random.Random(seed)
+    historical_count = len(values) - 1
+    sample_count = limit - 1
+    selected = []
+    for sample_index in range(sample_count):
+        start = sample_index * historical_count // sample_count
+        stop = (sample_index + 1) * historical_count // sample_count
+        selected.append(values[rng.randrange(start, stop)])
+    selected.append(values[-1])
+    return selected
 
 
 def materialize_rel_stack(data_dir: Path | None = None) -> list[str]:
@@ -421,9 +456,17 @@ def build_task_split_frame(
             "rel-stack", task_name, split, download=True
         )
         if max_timestamps is not None and len(cut_timestamps) > max_timestamps:
-            raise ValueError(
-                "Subsampling RelBench timestamps is disabled; use the complete "
-                "official task schedule"
+            original_count = len(cut_timestamps)
+            cut_timestamps = _select_randomly_spaced_timestamps(
+                cut_timestamps,
+                max_timestamps,
+            )
+            print(
+                "timestamp_sampling: "
+                f"rel-stack/{task_name} split={split} "
+                f"selected={len(cut_timestamps)}/{original_count} "
+                f"seed={STACK_TIMESTAMP_SAMPLE_SEED}",
+                flush=True,
             )
         cut_timestamp = pd.Timestamp(cut_timestamps[-1])
     else:

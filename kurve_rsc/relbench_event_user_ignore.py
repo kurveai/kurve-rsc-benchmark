@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+from itertools import chain
 from pathlib import Path
+from typing import Iterable
 
 import duckdb
 import numpy as np
@@ -77,12 +79,26 @@ def _catboost_inputs(
     return inputs, inferred_categorical_indices
 
 
+def _columns_present_in_all_frames(frames: Iterable[pd.DataFrame]) -> list[str]:
+    """Return columns shared by every frame, ordered like the first frame."""
+
+    frame_iterator = iter(frames)
+    first_frame = next(frame_iterator, None)
+    if first_frame is None:
+        return []
+
+    ordered_columns = first_frame.columns.tolist()
+    common_columns = set(ordered_columns)
+    for frame in frame_iterator:
+        common_columns.intersection_update(frame.columns)
+    return [column for column in ordered_columns if column in common_columns]
+
+
 class _FrozenGraphOperations:
-    """Capture one GraphReduce plan and enforce it on every later cutoff."""
+    """Capture one GraphReduce operation plan and replay it on later cutoffs."""
 
     def __init__(self) -> None:
         self.plan: dict[str, object] | None = None
-        self.feature_columns: tuple[str, ...] | None = None
         self.source_split: str | None = None
         self.source_cut_date: pd.Timestamp | None = None
 
@@ -94,7 +110,7 @@ class _FrozenGraphOperations:
         if self.plan is not None:
             graph.apply_execution_plan(self.plan)
 
-    def capture_or_validate(
+    def capture(
         self,
         graph: GraphReduce,
         features: pd.DataFrame,
@@ -102,36 +118,21 @@ class _FrozenGraphOperations:
         split_name: str,
         cut_date: pd.Timestamp,
     ) -> None:
-        columns = tuple(features.columns)
-        if self.plan is None:
-            plan = graph.freeze_execution_plan()
-            records = plan.get("records", [])
-            if not records:
-                raise RuntimeError("GraphReduce produced an empty execution plan")
-            self.plan = plan
-            self.feature_columns = columns
-            self.source_split = split_name
-            self.source_cut_date = pd.Timestamp(cut_date)
-            print(
-                "frozen_execution_plan: "
-                f"split={split_name} cutoff={pd.Timestamp(cut_date).isoformat()} "
-                f"records={len(records)} features={len(columns)}",
-                flush=True,
-            )
+        if self.plan is not None:
             return
 
-        assert self.feature_columns is not None
-        if columns == self.feature_columns:
-            return
-        expected = set(self.feature_columns)
-        actual = set(columns)
-        missing = sorted(expected - actual)
-        unexpected = sorted(actual - expected)
-        raise RuntimeError(
-            "Frozen GraphReduce plan produced a different feature schema at "
-            f"{split_name}/{pd.Timestamp(cut_date).isoformat()}: "
-            f"missing={missing}, unexpected={unexpected}, "
-            f"order_changed={not missing and not unexpected}"
+        plan = graph.freeze_execution_plan()
+        records = plan.get("records", [])
+        if not records:
+            raise RuntimeError("GraphReduce produced an empty execution plan")
+        self.plan = plan
+        self.source_split = split_name
+        self.source_cut_date = pd.Timestamp(cut_date)
+        print(
+            "frozen_execution_plan: "
+            f"split={split_name} cutoff={pd.Timestamp(cut_date).isoformat()} "
+            f"records={len(records)} features={len(features.columns)}",
+            flush=True,
         )
 
 
@@ -293,7 +294,7 @@ def run_rel_event_user_ignore(
                 frozen_graph_operations.apply(graph)
                 graph.do_transformations_sql()
                 features = con.sql(f"SELECT * FROM {graph.parent_node._cur_data_ref}").to_df().copy()
-                frozen_graph_operations.capture_or_validate(
+                frozen_graph_operations.capture(
                     graph,
                     features,
                     split_name=split_name,
@@ -337,6 +338,14 @@ def run_rel_event_user_ignore(
     finally:
         con.close()
 
+    common_columns = set(
+        _columns_present_in_all_frames(
+            chain.from_iterable(
+                split_frames[split_name].iter_batches()
+                for split_name in ("train", "val", "test")
+            )
+        )
+    )
     train_store = split_frames["train"]
     df_val = split_frames["val"].to_dataframe()
     df_test = split_frames["test"].to_dataframe()
@@ -346,7 +355,8 @@ def run_rel_event_user_ignore(
     feature_columns = [
         column
         for column in train_sample.columns
-        if column != TARGET_COLUMN
+        if column in common_columns
+        and column != TARGET_COLUMN
         and "label" not in column.lower()
         and "user_id" not in column.lower()
         and not pd.api.types.is_datetime64_any_dtype(train_sample[column])
@@ -360,16 +370,6 @@ def run_rel_event_user_ignore(
     ]
     if not feature_columns or train_store.target_nunique(TARGET_COLUMN) < 2:
         return train_store, df_val, df_test, None, None, len(feature_columns), materialized, TARGET_COLUMN
-
-    for split_name, frame in (("validation", df_val), ("test", df_test)):
-        missing_features = [
-            column for column in feature_columns if column not in frame.columns
-        ]
-        if missing_features:
-            raise RuntimeError(
-                f"{split_name} frame is missing frozen training features: "
-                f"{missing_features}"
-            )
 
     _, categorical_indices = _catboost_inputs(train_sample, feature_columns)
     val_inputs, _ = _catboost_inputs(
