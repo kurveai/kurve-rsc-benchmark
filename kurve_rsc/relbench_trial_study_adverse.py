@@ -31,7 +31,7 @@ def run_rel_trial_study_adverse(
 
 
 def main() -> None:
-    use_feature_manifest = feature_manifest_enabled()
+    use_feature_manifest = feature_manifest_enabled("rel-trial/study-adverse")
     df_train, df_val, df_test, val_metrics, test_metrics, n_features, materialized, target = (
         run_rel_trial_study_adverse(use_feature_manifest=use_feature_manifest)
     )

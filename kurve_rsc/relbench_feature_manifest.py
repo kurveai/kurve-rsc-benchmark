@@ -15,7 +15,9 @@ from graphreduce.node import DuckdbNode
 FEATURE_MANIFEST_ENV = "KURVE_RSC_FEATURE_MANIFEST"
 LEGACY_TRIAL_FEATURE_MANIFEST_ENV = "KURVE_RSC_TRIAL_FEATURE_MANIFEST"
 FEATURE_MANIFEST_SAMPLE_ROWS = 10_000
-FEATURE_MANIFEST_DATASETS = frozenset({"rel-event", "rel-f1", "rel-trial"})
+FEATURE_MANIFEST_TASKS = frozenset(
+    {"rel-trial/study-outcome", "rel-trial/site-success"}
+)
 
 
 @dataclass(frozen=True)
@@ -74,12 +76,16 @@ def _env_flag(name: str, default: bool = False) -> bool:
     raise ValueError(f"{name} must be a boolean value")
 
 
-def feature_manifest_enabled() -> bool:
-    """Return the shared opt-in, retaining the original trial-only alias."""
+def feature_manifest_enabled(task_name: str | None = None) -> bool:
+    """Return whether the opt-in is requested and enabled for this task."""
 
     if FEATURE_MANIFEST_ENV in os.environ:
-        return _env_flag(FEATURE_MANIFEST_ENV)
-    return _env_flag(LEGACY_TRIAL_FEATURE_MANIFEST_ENV)
+        requested = _env_flag(FEATURE_MANIFEST_ENV)
+    else:
+        requested = _env_flag(LEGACY_TRIAL_FEATURE_MANIFEST_ENV)
+    if task_name is None:
+        return requested
+    return requested and task_name in FEATURE_MANIFEST_TASKS
 
 
 def _quote_identifier(identifier: str) -> str:

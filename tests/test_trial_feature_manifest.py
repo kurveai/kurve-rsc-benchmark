@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "kurve_rsc"))
 from graphreduce.node import DuckdbNode
 from relbench_feature_manifest import (
     FEATURE_MANIFEST_ENV,
+    FEATURE_MANIFEST_TASKS,
     LEGACY_TRIAL_FEATURE_MANIFEST_ENV,
     FeatureManifestSource,
     TRIAL_FEATURE_MANIFEST_SOURCES,
@@ -57,6 +58,19 @@ def test_shared_manifest_environment_takes_precedence(monkeypatch) -> None:
 
     monkeypatch.setenv(FEATURE_MANIFEST_ENV, "0")
     assert feature_manifest_enabled() is False
+
+
+def test_manifest_opt_in_is_limited_to_validated_tasks(monkeypatch) -> None:
+    monkeypatch.setenv(FEATURE_MANIFEST_ENV, "1")
+
+    assert FEATURE_MANIFEST_TASKS == {
+        "rel-trial/study-outcome",
+        "rel-trial/site-success",
+    }
+    assert feature_manifest_enabled("rel-trial/study-outcome") is True
+    assert feature_manifest_enabled("rel-trial/site-success") is True
+    assert feature_manifest_enabled("rel-f1/driver-dnf") is False
+    assert feature_manifest_enabled("rel-event/user-repeat") is False
 
 
 def test_trial_manifest_applies_safe_source_columns_and_annotations() -> None:

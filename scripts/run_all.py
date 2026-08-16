@@ -146,8 +146,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=_env_flag(FEATURE_MANIFEST_ENV),
         help=(
-            "Fit and apply GraphReduce feature manifests for rel-f1, "
-            "rel-event, and rel-trial tasks. Other datasets are unchanged."
+            "Fit and apply GraphReduce feature manifests for rel-trial "
+            "study-outcome and site-success. Other tasks are unchanged."
         ),
     )
     parser.add_argument(
@@ -309,7 +309,7 @@ def write_report(
         f"- Single train period: `{single_train_period}`",
         f"- Model backend: `{model_backend}`",
         f"- Train all at once: `{train_all_at_once}`",
-        f"- Feature manifest: `{feature_manifest}` (rel-f1, rel-event, rel-trial only)",
+        f"- Feature manifest: `{feature_manifest}` (study-outcome and site-success only)",
         f"- Submission directory: `{submission_dir or 'disabled'}`",
         f"- Passed: `{payload['passed_count']}`",
         f"- Failed: `{payload['failed_count']}`",
@@ -347,7 +347,7 @@ def main() -> int:
     print(f"Train all at once: {args.train_all_at_once}", flush=True)
     print(
         "Feature manifest: "
-        f"{args.feature_manifest} (rel-f1, rel-event, rel-trial only)",
+        f"{args.feature_manifest} (study-outcome and site-success only)",
         flush=True,
     )
     if resolved_submission_dir is not None:

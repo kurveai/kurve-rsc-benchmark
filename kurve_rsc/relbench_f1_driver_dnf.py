@@ -346,7 +346,7 @@ def run_rel_f1_driver_dnf(
 
 
 def main() -> None:
-    use_feature_manifest = feature_manifest_enabled()
+    use_feature_manifest = feature_manifest_enabled("rel-f1/driver-dnf")
     df_train, df_val, df_test, val_metrics, test_metrics, n_features, materialized, target = run_rel_f1_driver_dnf(
         use_feature_manifest=use_feature_manifest,
     )

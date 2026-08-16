@@ -687,7 +687,7 @@ def run_rel_trial_study_outcome(
 
 
 def main() -> None:
-    use_feature_manifest = feature_manifest_enabled()
+    use_feature_manifest = feature_manifest_enabled("rel-trial/study-outcome")
     (
         df_train,
         df_val,

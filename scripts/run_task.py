@@ -66,8 +66,8 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=_env_flag(FEATURE_MANIFEST_ENV),
         help=(
-            "Fit and apply GraphReduce feature manifests for rel-f1, "
-            "rel-event, and rel-trial tasks. Other datasets are unchanged."
+            "Fit and apply GraphReduce feature manifests for rel-trial "
+            "study-outcome and site-success. Other tasks are unchanged."
         ),
     )
     return parser

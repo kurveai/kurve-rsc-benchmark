@@ -130,8 +130,8 @@ that uses the incremental CatBoost helpers. Joint fitting can consume much more
 memory on the largest tasks. Use `--no-train-all-at-once` or omit the flag to
 retain incremental training.
 
-GraphReduce's typed feature manifests are opt-in for the `rel-f1`, `rel-event`,
-and `rel-trial` classification and regression tasks:
+GraphReduce's typed feature manifests are opt-in for
+`rel-trial/study-outcome` and `rel-trial/site-success`:
 
 ```bash
 python scripts/run_all.py --task-type classification --feature-manifest
@@ -141,7 +141,7 @@ The same `--feature-manifest` flag works with `scripts/run_task.py` and with
 regression runs. Each participating task profiles its source schema once from
 rows before that dataset's validation cutoff, preserves the columns needed for
 joins and time filtering, and reuses the frozen decisions for all training,
-validation, and test frames. The remaining dataset families are unchanged.
+validation, and test frames. All remaining tasks are unchanged.
 Omit the flag (or pass `--no-feature-manifest`) to retain the existing manual
 column selection.
 

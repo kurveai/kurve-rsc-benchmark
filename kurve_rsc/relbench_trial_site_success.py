@@ -40,7 +40,7 @@ def run_rel_trial_site_success(
 
 
 def main() -> None:
-    use_feature_manifest = feature_manifest_enabled()
+    use_feature_manifest = feature_manifest_enabled("rel-trial/site-success")
     df_train, df_val, df_test, val_metrics, test_metrics, n_features, materialized, target = (
         run_rel_trial_site_success(use_feature_manifest=use_feature_manifest)
     )

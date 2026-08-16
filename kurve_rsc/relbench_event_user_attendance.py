@@ -359,7 +359,7 @@ def run_rel_event_user_attendance(
 
 
 def main() -> None:
-    use_feature_manifest = feature_manifest_enabled()
+    use_feature_manifest = feature_manifest_enabled("rel-event/user-attendance")
     df_train, df_val, df_test, val_metrics, test_metrics, n_features, materialized, target = run_rel_event_user_attendance(
         use_feature_manifest=use_feature_manifest,
     )
