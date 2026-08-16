@@ -37,6 +37,12 @@ from relbench_catboost_utils import (
     selected_model_backend,
     set_feature_families,
 )
+from relbench_feature_manifest import (
+    TRIAL_FEATURE_MANIFEST_SOURCES,
+    TRIAL_VALIDATION_CUT_DATE,
+    apply_feature_manifests,
+    load_feature_manifest_samples,
+)
 
 LOOKBACK_START = datetime.datetime(2000, 1, 1)
 SITE_SUCCESS_FEATURE_FAMILIES = ("base", "semantic", "context")
@@ -136,6 +142,9 @@ def build_study_features(
     con: duckdb.DuckDBPyConnection,
     table_columns: dict[str, list[str]],
     task_timestamp: pd.Timestamp,
+    *,
+    feature_manifest_samples: dict[str, pd.DataFrame] | None = None,
+    feature_manifest_summary: dict[str, dict[str, int]] | None = None,
 ) -> pd.DataFrame:
     cut_date = _feature_cut_date(task_timestamp)
 
@@ -368,6 +377,30 @@ def build_study_features(
     set_feature_families(
         [outcome_analyses, reported_event_totals], TEMPORAL_FEATURE_FAMILIES
     )
+    if feature_manifest_samples is not None:
+        current_summary = apply_feature_manifests(
+            {
+                "studies": studies,
+                "outcomes": outcomes,
+                "outcome_analyses": outcome_analyses,
+                "drop_withdrawals": drop_withdrawals,
+                "reported_event_totals": reported_event_totals,
+                "designs": designs,
+                "eligibilities": eligibilities,
+                "interventions_studies": interventions_studies,
+                "conditions_studies": conditions_studies,
+                "facilities_studies": facilities_studies,
+                "sponsors_studies": sponsors_studies,
+                "interventions": interventions,
+                "conditions": conditions,
+                "facilities": facilities,
+                "sponsors": sponsors,
+            },
+            TRIAL_FEATURE_MANIFEST_SOURCES,
+            feature_manifest_samples,
+        )
+        if feature_manifest_summary is not None and not feature_manifest_summary:
+            feature_manifest_summary.update(current_summary)
     gr = _graph(
         con,
         f"rel_trial_study_features_{task_timestamp.date()}",
@@ -427,6 +460,9 @@ def build_site_features(
     con: duckdb.DuckDBPyConnection,
     table_columns: dict[str, list[str]],
     task_timestamp: pd.Timestamp,
+    *,
+    feature_manifest_samples: dict[str, pd.DataFrame] | None = None,
+    feature_manifest_summary: dict[str, dict[str, int]] | None = None,
 ) -> pd.DataFrame:
     cut_date = _feature_cut_date(task_timestamp)
 
@@ -549,6 +585,21 @@ def build_site_features(
     set_feature_families(
         [outcome_analyses, reported_event_totals], SITE_SUCCESS_FEATURE_FAMILIES
     )
+    if feature_manifest_samples is not None:
+        current_summary = apply_feature_manifests(
+            {
+                "facilities": facilities,
+                "facilities_studies": facilities_studies,
+                "studies": studies,
+                "outcomes": outcomes,
+                "outcome_analyses": outcome_analyses,
+                "reported_event_totals": reported_event_totals,
+            },
+            TRIAL_FEATURE_MANIFEST_SOURCES,
+            feature_manifest_samples,
+        )
+        if feature_manifest_summary is not None and not feature_manifest_summary:
+            feature_manifest_summary.update(current_summary)
     gr = _graph(
         con,
         f"rel_trial_site_features_{task_timestamp.date()}",
@@ -605,9 +656,11 @@ def build_task_split_frame(
     table_columns: dict[str, list[str]],
     task_name: str,
     split: str,
-    feature_builder: Callable[[duckdb.DuckDBPyConnection, dict[str, list[str]], pd.Timestamp], pd.DataFrame],
+    feature_builder: Callable[..., pd.DataFrame],
     feature_entity_col: str,
     max_train_frames: int | None = None,
+    feature_manifest_samples: dict[str, pd.DataFrame] | None = None,
+    feature_manifest_summary: dict[str, dict[str, int]] | None = None,
 ) -> tuple[object, pd.DataFrame, pd.Timestamp]:
     task, task_table, cut_timestamps = get_relbench_split_task_table(
         "rel-trial", task_name, split, download=True
@@ -622,7 +675,13 @@ def build_task_split_frame(
     labels = task_table.df.copy()
     labels["_relbench_entity_key"] = labels[task.entity_col].astype(str)
     def build_frame(frame_con: duckdb.DuckDBPyConnection, cut_timestamp: pd.Timestamp) -> pd.DataFrame:
-        features = feature_builder(frame_con, table_columns, cut_timestamp)
+        features = feature_builder(
+            frame_con,
+            table_columns,
+            cut_timestamp,
+            feature_manifest_samples=feature_manifest_samples,
+            feature_manifest_summary=feature_manifest_summary,
+        )
         features["_relbench_entity_key"] = features[feature_entity_col].astype(str)
         timestamp_labels = labels[labels[task.time_col] == cut_timestamp]
         return features.merge(
@@ -660,11 +719,12 @@ def select_shared_numeric_features(
 
 def run_rel_trial_regression_task(
     task_name: str,
-    feature_builder: Callable[[duckdb.DuckDBPyConnection, dict[str, list[str]], pd.Timestamp], pd.DataFrame],
+    feature_builder: Callable[..., pd.DataFrame],
     feature_entity_col: str,
     data_dir: Path | None = None,
     max_train_frames: int | None = None,
     model_backend: str | None = None,
+    use_feature_manifest: bool = False,
 ) -> tuple[RelBenchFrameStore, pd.DataFrame, pd.DataFrame, dict[str, float] | None, dict[str, float] | None, int, list[str], str]:
     model_backend = selected_model_backend(override=model_backend)
     materialized: list[str] = []
@@ -672,9 +732,19 @@ def run_rel_trial_regression_task(
     con = duckdb.connect()
     split_frames: dict[str, RelBenchFrameStore] = {}
     split_tasks: dict[str, object] = {}
+    feature_manifest_summary: dict[str, dict[str, int]] = {}
 
     try:
         table_columns = prepare_trial_views(con)
+        feature_manifest_samples = (
+            load_feature_manifest_samples(
+                con,
+                TRIAL_FEATURE_MANIFEST_SOURCES,
+                TRIAL_VALIDATION_CUT_DATE,
+            )
+            if use_feature_manifest
+            else None
+        )
         for split_name in ["train", "val", "test"]:
             task, frame_store, _ = build_task_split_frame(
                 con,
@@ -684,11 +754,16 @@ def run_rel_trial_regression_task(
                 feature_builder,
                 feature_entity_col,
                 max_train_frames=max_train_frames,
+                feature_manifest_samples=feature_manifest_samples,
+                feature_manifest_summary=feature_manifest_summary,
             )
             split_tasks[split_name] = task
             split_frames[split_name] = frame_store
     finally:
         con.close()
+
+    if use_feature_manifest:
+        print("feature_manifest_profile:", feature_manifest_summary, flush=True)
 
     train_store = split_frames["train"]
     df_val = split_frames["val"].to_dataframe()

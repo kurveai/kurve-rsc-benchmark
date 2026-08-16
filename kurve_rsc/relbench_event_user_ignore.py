@@ -23,6 +23,12 @@ from graphreduce.enum import ComputeLayerEnum, PeriodUnit
 from graphreduce.graph_reduce import GraphReduce
 from graphreduce.node import DuckdbNode
 from relbench_catboost_utils import TEMPORAL_FEATURE_FAMILIES, fit_tuned_classifier_incremental, set_feature_families
+from relbench_feature_manifest import (
+    FeatureManifestSource,
+    apply_feature_manifests,
+    feature_manifest_enabled,
+    load_feature_manifest_samples,
+)
 
 DATASET_NAME = "rel-event"
 TABLES = ["users", "events", "event_attendees", "event_interest", "user_friends"]
@@ -138,6 +144,8 @@ class _FrozenGraphOperations:
 
 def run_rel_event_user_ignore(
     data_dir: Path | None = None,
+    *,
+    use_feature_manifest: bool = False,
 ) -> tuple[RelBenchFrameStore, pd.DataFrame, pd.DataFrame, dict[str, float] | None, dict[str, float] | None, int, list[str], str]:
     _, db = get_relbench_dataset_db(
         DATASET_NAME, download=True, upto_test_timestamp=False
@@ -148,6 +156,7 @@ def run_rel_event_user_ignore(
     split_frames: dict[str, RelBenchFrameStore] = {}
     split_tasks = {}
     frozen_graph_operations = _FrozenGraphOperations()
+    feature_manifest_summary: dict[str, dict[str, int]] = {}
 
     try:
         register_relbench_db_views(con, db, TABLE_TO_VIEW, ROW_NUMBER_IDS, DROP_COLUMNS)
@@ -168,6 +177,9 @@ def run_rel_event_user_ignore(
         lookback_start = pd.Timestamp(bounds.loc[0, "min_timestamp"])
         user_columns = con.sql("SELECT * FROM users_src LIMIT 0").to_df().columns.tolist()
         event_columns = con.sql("SELECT * FROM events_src LIMIT 0").to_df().columns.tolist()
+        event_excluded_columns = tuple(
+            column for column in event_columns if column.lower() == "zip"
+        )
         # RelBench stores ZIP codes as strings. GraphReduce 1.9.1 can infer
         # numeric-looking strings as aggregate inputs and then emit SUM(zip),
         # which DuckDB rejects for this VARCHAR column.
@@ -192,6 +204,38 @@ def run_rel_event_user_ignore(
         interest_date_col = {column.lower(): column for column in interest_columns}["timestamp"]
         friend_id_col = {column.lower(): column for column in friend_columns}["friendship_id"]
         friend_user_col = {column.lower(): column for column in friend_columns}["user"]
+
+        feature_manifest_sources = {
+            "users": FeatureManifestSource("users_src", user_date_col),
+            "events": FeatureManifestSource(
+                "events_src",
+                event_date_col,
+                (event_user_col,),
+                event_excluded_columns,
+            ),
+            "attendees": FeatureManifestSource(
+                "event_attendees_src",
+                attendee_date_col,
+                (attendee_event_col, attendee_user_col),
+            ),
+            "interest": FeatureManifestSource(
+                "event_interest_src",
+                interest_date_col,
+                (interest_event_col, interest_user_col),
+            ),
+            "friends": FeatureManifestSource(
+                "user_friends_src", foreign_keys=(friend_user_col,)
+            ),
+        }
+        feature_manifest_samples = (
+            load_feature_manifest_samples(
+                con,
+                feature_manifest_sources,
+                VALIDATION_CUT_DATE,
+            )
+            if use_feature_manifest
+            else {}
+        )
 
         official_tables = {}
         split_cut_dates = {}
@@ -281,6 +325,20 @@ def run_rel_event_user_ignore(
                 set_feature_families(
                     [attendees_node, interest_node], TEMPORAL_FEATURE_FAMILIES
                 )
+                if use_feature_manifest:
+                    current_summary = apply_feature_manifests(
+                        {
+                            "users": users_node,
+                            "events": events_node,
+                            "attendees": attendees_node,
+                            "interest": interest_node,
+                            "friends": friends_node,
+                        },
+                        feature_manifest_sources,
+                        feature_manifest_samples,
+                    )
+                    if not feature_manifest_summary:
+                        feature_manifest_summary.update(current_summary)
                 for node in nodes:
                     graph.add_node(node)
 
@@ -337,6 +395,9 @@ def run_rel_event_user_ignore(
             split_frames[split_name] = frame_store
     finally:
         con.close()
+
+    if use_feature_manifest:
+        print("feature_manifest_profile:", feature_manifest_summary, flush=True)
 
     common_columns = set(
         _columns_present_in_all_frames(
@@ -421,7 +482,11 @@ def run_rel_event_user_ignore(
 
 
 def main() -> None:
-    df_train, df_val, df_test, val_metrics, test_metrics, n_features, materialized, target = run_rel_event_user_ignore()
+    use_feature_manifest = feature_manifest_enabled()
+    df_train, df_val, df_test, val_metrics, test_metrics, n_features, materialized, target = run_rel_event_user_ignore(
+        use_feature_manifest=use_feature_manifest,
+    )
+    print("feature_manifest_enabled:", use_feature_manifest, flush=True)
     print("materialized_files:", materialized, flush=True)
     print("validation_timestamp:", VALIDATION_CUT_DATE.date(), flush=True)
     print("test_timestamp:", TEST_CUT_DATE.date(), flush=True)

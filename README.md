@@ -15,7 +15,7 @@ task runners, metrics, reports, and reproducibility checks.
 
 ## Environment
 
-GraphReduce is installed from the published `graphreduce==1.9.17` package.
+GraphReduce is installed from the published `graphreduce==1.10.1` package.
 No neighboring GraphReduce source checkout is required.
 
 ```bash
@@ -129,6 +129,21 @@ The flag is also supported by `scripts/run_all.py` and applies to every task
 that uses the incremental CatBoost helpers. Joint fitting can consume much more
 memory on the largest tasks. Use `--no-train-all-at-once` or omit the flag to
 retain incremental training.
+
+GraphReduce's typed feature manifests are opt-in for the `rel-f1`, `rel-event`,
+and `rel-trial` classification and regression tasks:
+
+```bash
+python scripts/run_all.py --task-type classification --feature-manifest
+```
+
+The same `--feature-manifest` flag works with `scripts/run_task.py` and with
+regression runs. Each participating task profiles its source schema once from
+rows before that dataset's validation cutoff, preserves the columns needed for
+joins and time filtering, and reuses the frozen decisions for all training,
+validation, and test frames. The remaining dataset families are unchanged.
+Omit the flag (or pass `--no-feature-manifest`) to retain the existing manual
+column selection.
 
 Apart from the bounded Stack schedule above, tasks retain their complete
 historical training schedule by default. To use only one training label period

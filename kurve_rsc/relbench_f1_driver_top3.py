@@ -18,6 +18,12 @@ from relbench_dataset_utils import (
     target_table_from_frame,
 )
 from relbench_catboost_utils import TEMPORAL_FEATURE_FAMILIES, fit_tuned_classifier_incremental, set_feature_families
+from relbench_feature_manifest import (
+    FeatureManifestSource,
+    apply_feature_manifests,
+    feature_manifest_enabled,
+    load_feature_manifest_samples,
+)
 
 from graphreduce.enum import ComputeLayerEnum, PeriodUnit
 from graphreduce.graph_reduce import GraphReduce
@@ -46,6 +52,8 @@ FRAME_STRIDE = 10
 
 def run_rel_f1_driver_top3(
     data_dir: Path | None = None,
+    *,
+    use_feature_manifest: bool = False,
 ) -> tuple[RelBenchFrameStore, pd.DataFrame, pd.DataFrame, dict[str, float] | None, dict[str, float] | None, int, list[str], str]:
     _, db = get_relbench_dataset_db(DATASET_NAME, download=True, upto_test_timestamp=False)
     official_task = get_relbench_task(DATASET_NAME, "driver-top3", download=True)
@@ -53,6 +61,7 @@ def run_rel_f1_driver_top3(
 
     con = duckdb.connect()
     split_frames: dict[str, RelBenchFrameStore] = {}
+    feature_manifest_summary: dict[str, dict[str, int]] = {}
 
     try:
         register_relbench_db_views(
@@ -137,6 +146,41 @@ def run_rel_f1_driver_top3(
         circuit_id_col = {column.lower(): column for column in circuit_columns}["circuitid"]
         constructor_id_col = {column.lower(): column for column in constructor_columns}["constructorid"]
 
+        feature_manifest_sources = {
+            "drivers": FeatureManifestSource("drivers_src"),
+            "qualifying": FeatureManifestSource(
+                "qualifying_src",
+                qualifying_date_col,
+                (
+                    qualifying_driver_col,
+                    qualifying_race_col,
+                    qualifying_constructor_col,
+                ),
+            ),
+            "results": FeatureManifestSource(
+                "results_src",
+                result_date_col,
+                (result_driver_col, result_race_col, result_constructor_col),
+            ),
+            "standings": FeatureManifestSource(
+                "standings_src", standing_date_col, (standing_driver_col,)
+            ),
+            "races": FeatureManifestSource(
+                "races_src", race_date_col, (race_circuit_col,)
+            ),
+            "circuits": FeatureManifestSource("circuits_src"),
+            "constructors": FeatureManifestSource("constructors_src"),
+        }
+        feature_manifest_samples = (
+            load_feature_manifest_samples(
+                con,
+                feature_manifest_sources,
+                VALIDATION_CUT_DATE,
+            )
+            if use_feature_manifest
+            else {}
+        )
+
         for split_name, (task, task_table, cut_dates) in split_specs.items():
             frame_store = RelBenchFrameStore(
                 f"rel-f1-driver-top3-{split_name}", persist_each_frame=True
@@ -220,6 +264,22 @@ def run_rel_f1_driver_top3(
 
                 nodes = [driver_node, qualifying_node, result_node, standing_node, race_node, circuit_node, constructor_node]
                 set_feature_families([qualifying_node], TEMPORAL_FEATURE_FAMILIES)
+                if use_feature_manifest:
+                    current_summary = apply_feature_manifests(
+                        {
+                            "drivers": driver_node,
+                            "qualifying": qualifying_node,
+                            "results": result_node,
+                            "standings": standing_node,
+                            "races": race_node,
+                            "circuits": circuit_node,
+                            "constructors": constructor_node,
+                        },
+                        feature_manifest_sources,
+                        feature_manifest_samples,
+                    )
+                    if not feature_manifest_summary:
+                        feature_manifest_summary.update(current_summary)
                 for node in nodes:
                     graph.add_node(node)
 
@@ -260,6 +320,9 @@ def run_rel_f1_driver_top3(
             split_frames[split_name] = frame_store
     finally:
         con.close()
+
+    if use_feature_manifest:
+        print("feature_manifest_profile:", feature_manifest_summary, flush=True)
 
     train_store = split_frames["train"]
     df_val = split_frames["val"].to_dataframe()
@@ -309,7 +372,11 @@ def run_rel_f1_driver_top3(
 
 
 def main() -> None:
-    df_train, df_val, df_test, val_metrics, test_metrics, n_features, materialized, target = run_rel_f1_driver_top3()
+    use_feature_manifest = feature_manifest_enabled()
+    df_train, df_val, df_test, val_metrics, test_metrics, n_features, materialized, target = run_rel_f1_driver_top3(
+        use_feature_manifest=use_feature_manifest,
+    )
+    print("feature_manifest_enabled:", use_feature_manifest, flush=True)
     print("materialized_files:", materialized, flush=True)
     print("validation_timestamp:", VALIDATION_CUT_DATE.date(), flush=True)
     print("test_timestamp:", TEST_CUT_DATE.date(), flush=True)

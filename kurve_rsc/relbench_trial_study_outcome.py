@@ -27,6 +27,12 @@ from graphreduce.graph_reduce import GraphReduce
 from graphreduce.models import sqlop
 from graphreduce.node import DuckdbNode
 from relbench_catboost_utils import TEMPORAL_FEATURE_FAMILIES, fit_tuned_classifier
+from relbench_feature_manifest import (
+    TRIAL_FEATURE_MANIFEST_SOURCES,
+    apply_feature_manifests,
+    feature_manifest_enabled,
+    load_feature_manifest_samples,
+)
 
 VAL_TIMESTAMP = datetime.datetime(2020, 1, 1)
 TEST_TIMESTAMP = datetime.datetime(2021, 1, 1)
@@ -51,7 +57,6 @@ TABLE_NAME_TO_FILENAME = {
     "sponsors_studies": "sponsors_studies.parquet",
 }
 
-
 def _select_columns(
     columns: list[str],
     required: list[str],
@@ -68,6 +73,8 @@ def _select_columns(
 
 def run_rel_trial_study_outcome(
     data_dir: Path | None = None,
+    *,
+    use_feature_manifest: bool = False,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, float | None, float | None, int, list[str], str]:
     _, db = get_relbench_dataset_db("rel-trial", download=True, upto_test_timestamp=False)
     split_tasks = {}
@@ -95,6 +102,7 @@ def run_rel_trial_study_outcome(
 
     con = duckdb.connect()
     frames_by_name: dict[str, pd.DataFrame] = {}
+    feature_manifest_summary: dict[str, dict[str, int]] = {}
 
     try:
         register_relbench_db_views(
@@ -106,6 +114,15 @@ def run_rel_trial_study_outcome(
         table_columns: dict[str, list[str]] = {}
         for table_name in TABLE_NAME_TO_FILENAME:
             table_columns[table_name] = con.sql(f"SELECT * FROM {table_name}_src LIMIT 0").to_df().columns.tolist()
+        feature_manifest_samples = (
+            load_feature_manifest_samples(
+                con,
+                TRIAL_FEATURE_MANIFEST_SOURCES,
+                VAL_TIMESTAMP,
+            )
+            if use_feature_manifest
+            else {}
+        )
 
         def build_frame(frame_con, frame_info):
             con = frame_con
@@ -437,23 +454,32 @@ def run_rel_trial_study_outcome(
                 use_temp_tables=True,
             )
 
-            nodes = [
-                studies,
-                outcomes,
-                outcome_analyses,
-                drop_withdrawals,
-                reported_event_totals,
-                designs,
-                eligibilities,
-                interventions_studies,
-                conditions_studies,
-                facilities_studies,
-                sponsors_studies,
-                interventions,
-                conditions,
-                facilities,
-                sponsors,
-            ]
+            nodes_by_table = {
+                "studies": studies,
+                "outcomes": outcomes,
+                "outcome_analyses": outcome_analyses,
+                "drop_withdrawals": drop_withdrawals,
+                "reported_event_totals": reported_event_totals,
+                "designs": designs,
+                "eligibilities": eligibilities,
+                "interventions_studies": interventions_studies,
+                "conditions_studies": conditions_studies,
+                "facilities_studies": facilities_studies,
+                "sponsors_studies": sponsors_studies,
+                "interventions": interventions,
+                "conditions": conditions,
+                "facilities": facilities,
+                "sponsors": sponsors,
+            }
+            nodes = list(nodes_by_table.values())
+            if use_feature_manifest:
+                current_summary = apply_feature_manifests(
+                    nodes_by_table,
+                    TRIAL_FEATURE_MANIFEST_SOURCES,
+                    feature_manifest_samples,
+                )
+                if not feature_manifest_summary:
+                    feature_manifest_summary.update(current_summary)
             for node in nodes:
                 graph.add_node(node)
 
@@ -581,6 +607,9 @@ def run_rel_trial_study_outcome(
     finally:
         con.close()
 
+    if use_feature_manifest:
+        print("feature_manifest_profile:", feature_manifest_summary, flush=True)
+
     target = split_tasks["train"].target_col
     train_frame_names = [
         frame_name for split_name, frame_name, *_ in frame_jobs if split_name == "train"
@@ -658,6 +687,7 @@ def run_rel_trial_study_outcome(
 
 
 def main() -> None:
+    use_feature_manifest = feature_manifest_enabled()
     (
         df_train,
         df_val,
@@ -667,7 +697,10 @@ def main() -> None:
         n_features,
         materialized,
         target,
-    ) = run_rel_trial_study_outcome()
+    ) = run_rel_trial_study_outcome(
+        use_feature_manifest=use_feature_manifest,
+    )
+    print("feature_manifest_enabled:", use_feature_manifest, flush=True)
     print("materialized_files:", materialized, flush=True)
     print("val_cut_date:", VAL_TIMESTAMP.date(), flush=True)
     print("test_cut_date:", TEST_TIMESTAMP.date(), flush=True)

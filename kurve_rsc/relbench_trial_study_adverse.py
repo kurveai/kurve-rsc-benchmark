@@ -13,23 +13,29 @@ if str(REPO_ROOT) not in sys.path:
 import pandas as pd
 
 from relbench_trial_task_utils import build_study_features, run_rel_trial_regression_task
+from relbench_feature_manifest import feature_manifest_enabled
 
 
 def run_rel_trial_study_adverse(
     data_dir: Path | None = None,
+    *,
+    use_feature_manifest: bool = False,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, float] | None, dict[str, float] | None, int, list[str], str]:
     return run_rel_trial_regression_task(
         task_name="study-adverse",
         feature_builder=build_study_features,
         feature_entity_col="std_nct_id",
         data_dir=data_dir,
+        use_feature_manifest=use_feature_manifest,
     )
 
 
 def main() -> None:
+    use_feature_manifest = feature_manifest_enabled()
     df_train, df_val, df_test, val_metrics, test_metrics, n_features, materialized, target = (
-        run_rel_trial_study_adverse()
+        run_rel_trial_study_adverse(use_feature_manifest=use_feature_manifest)
     )
+    print("feature_manifest_enabled:", use_feature_manifest, flush=True)
     print("materialized_files:", materialized, flush=True)
     print("task:", "study-adverse", flush=True)
     print("target:", target, flush=True)

@@ -14,6 +14,7 @@ if str(REPO_ROOT) not in sys.path:
 import pandas as pd
 
 from relbench_trial_task_utils import build_site_features, run_rel_trial_regression_task
+from relbench_feature_manifest import feature_manifest_enabled
 
 MODEL_BACKEND_ENV = "KURVE_RSC_MODEL_BACKEND"
 
@@ -21,6 +22,8 @@ MODEL_BACKEND_ENV = "KURVE_RSC_MODEL_BACKEND"
 def run_rel_trial_site_success(
     data_dir: Path | None = None,
     use_tabpfn: bool | None = None,
+    *,
+    use_feature_manifest: bool = False,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, float] | None, dict[str, float] | None, int, list[str], str]:
     model_backend = os.environ.get(MODEL_BACKEND_ENV, "catboost")
     if use_tabpfn is not None:
@@ -32,13 +35,16 @@ def run_rel_trial_site_success(
         data_dir=data_dir,
         max_train_frames=5,
         model_backend=model_backend,
+        use_feature_manifest=use_feature_manifest,
     )
 
 
 def main() -> None:
+    use_feature_manifest = feature_manifest_enabled()
     df_train, df_val, df_test, val_metrics, test_metrics, n_features, materialized, target = (
-        run_rel_trial_site_success()
+        run_rel_trial_site_success(use_feature_manifest=use_feature_manifest)
     )
+    print("feature_manifest_enabled:", use_feature_manifest, flush=True)
     print("materialized_files:", materialized, flush=True)
     print("task:", "site-success", flush=True)
     print("target:", target, flush=True)

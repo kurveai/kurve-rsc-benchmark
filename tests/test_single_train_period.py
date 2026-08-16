@@ -81,3 +81,4 @@ def test_top_level_report_records_single_train_period(tmp_path):
     payload = json.loads((tmp_path / "relbench_results.json").read_text())
     assert payload["single_train_period"] is True
     assert payload["model_backend"] == "tabpfn"
+    assert payload["feature_manifest"] is False

@@ -134,3 +134,14 @@ def test_cli_flags_enable_joint_training() -> None:
 
     assert task_args.train_all_at_once is True
     assert all_args.train_all_at_once is True
+
+
+def test_cli_flags_enable_scoped_feature_manifests() -> None:
+    task_args = run_task.parse_args(
+        ["relbench_f1_driver_position.py", "--feature-manifest"]
+    )
+    all_args = run_all.parse_args(["--feature-manifest"])
+
+    assert task_args.feature_manifest is True
+    assert all_args.feature_manifest is True
+    assert run_all.parse_args(["--no-feature-manifest"]).feature_manifest is False
