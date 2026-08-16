@@ -49,7 +49,9 @@ TEST_CUT_DATE = pd.Timestamp("2010-01-01")
 LABEL_TIMEDELTA = pd.Timedelta(days=60)
 NUM_EVAL_TIMESTAMPS = 40
 TARGET_COLUMN = "position"
-FRAME_STRIDE = 10
+# Driver-position has only 7,453 labels across its 254 training cutoffs. Keep
+# every cutoff so the model sees the complete official training table.
+FRAME_STRIDE = 1
 
 
 def _task_table_for_split(split_name: str):

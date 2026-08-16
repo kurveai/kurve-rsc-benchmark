@@ -1,6 +1,7 @@
 from scripts.run_all import CLASSIFICATION_TASKS, REGRESSION_TASKS, TASK_GROUPS
 
 from kurve_rsc.feature_pipeline import _incremental_model_params
+from kurve_rsc.relbench_f1_driver_position import FRAME_STRIDE
 from kurve_rsc.relbench_regression_metrics import normalized_mae
 
 
@@ -24,3 +25,7 @@ def test_incremental_model_parameters_are_deterministic():
 
 def test_nmae_uses_only_the_training_target_standard_deviation():
     assert normalized_mae([1.0, 3.0], [2.0, 2.0], [1.0, 3.0]) == 1.0
+
+
+def test_driver_position_uses_every_training_frame():
+    assert FRAME_STRIDE == 1
