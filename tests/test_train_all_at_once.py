@@ -126,6 +126,46 @@ def test_single_config_regressor_honors_joint_training(monkeypatch) -> None:
     assert captured["kwargs"]["configs"] == (config,)
 
 
+def test_cross_entropy_fit_materializes_fractional_training_targets(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    expected_model = object()
+    expected_config = {"name": "probability"}
+
+    def fake_fit(train_inputs, train_target, val_inputs, val_target, **kwargs):
+        captured["train_inputs"] = train_inputs
+        captured["train_target"] = train_target
+        captured["kwargs"] = kwargs
+        return expected_model, expected_config, 0.2
+
+    monkeypatch.setattr(
+        feature_pipeline,
+        "fit_tuned_cross_entropy_model",
+        fake_fit,
+    )
+    batches = [
+        pd.DataFrame({"feature": [1.0, 2.0], "target": [0.0, 0.25]}),
+        pd.DataFrame({"feature": [3.0, 4.0], "target": [0.75, 1.0]}),
+    ]
+
+    model, config, mae = (
+        feature_pipeline.fit_tuned_cross_entropy_model_incremental(
+            lambda: iter(batches),
+            ["feature"],
+            "target",
+            pd.DataFrame({"feature": [1.5, 3.5]}),
+            pd.Series([0.2, 0.8]),
+            batch_count=2,
+            train_all_at_once=True,
+        )
+    )
+
+    assert model is expected_model
+    assert config == expected_config
+    assert mae == 0.2
+    assert captured["train_inputs"]["feature"].tolist() == [1.0, 2.0, 3.0, 4.0]
+    assert captured["train_target"].tolist() == [0.0, 0.25, 0.75, 1.0]
+
+
 def test_cli_flags_enable_joint_training() -> None:
     task_args = run_task.parse_args(
         ["relbench_event_user_ignore.py", "--train-all-at-once"]

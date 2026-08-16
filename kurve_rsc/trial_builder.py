@@ -16,6 +16,7 @@ if str(REPO_ROOT) not in sys.path:
 import duckdb
 import numpy as np
 import pandas as pd
+from sklearn.metrics import mean_absolute_error
 
 from graphreduce.enum import ComputeLayerEnum, PeriodUnit, SQLOpType
 from graphreduce.graph_reduce import GraphReduce
@@ -33,6 +34,7 @@ from relbench_regression_metrics import add_nmae
 from relbench_catboost_utils import (
     TEMPORAL_FEATURE_FAMILIES,
     fit_tabpfn_regressor,
+    fit_tuned_cross_entropy_model_incremental,
     fit_tuned_regressor_incremental,
     selected_model_backend,
     set_feature_families,
@@ -717,6 +719,51 @@ def select_shared_numeric_features(
     ]
 
 
+def bounded_probability_candidates(
+    regression_predictions: np.ndarray,
+    probability_predictions: np.ndarray,
+) -> dict[str, np.ndarray]:
+    """Build bounded site-success candidates from two complementary losses."""
+
+    regression = np.clip(
+        np.asarray(regression_predictions, dtype="float64"),
+        0.0,
+        1.0,
+    )
+    probability = np.clip(
+        np.asarray(probability_predictions, dtype="float64"),
+        0.0,
+        1.0,
+    )
+    if regression.shape != probability.shape:
+        raise ValueError("Prediction candidates must have matching shapes")
+    return {
+        "mae_regression": regression,
+        "cross_entropy_probability": probability,
+        "equal_weight_blend": 0.5 * (regression + probability),
+    }
+
+
+def select_bounded_probability_candidate(
+    target: pd.Series,
+    regression_predictions: np.ndarray,
+    probability_predictions: np.ndarray,
+) -> tuple[str, np.ndarray, dict[str, float]]:
+    """Select a bounded prediction strategy using validation MAE only."""
+
+    target_values = target.to_numpy(dtype="float64")
+    candidates = bounded_probability_candidates(
+        regression_predictions,
+        probability_predictions,
+    )
+    scores = {
+        name: float(mean_absolute_error(target_values, predictions))
+        for name, predictions in candidates.items()
+    }
+    selected_name = min(scores, key=scores.__getitem__)
+    return selected_name, candidates[selected_name], scores
+
+
 def run_rel_trial_regression_task(
     task_name: str,
     feature_builder: Callable[..., pd.DataFrame],
@@ -725,6 +772,7 @@ def run_rel_trial_regression_task(
     max_train_frames: int | None = None,
     model_backend: str | None = None,
     use_feature_manifest: bool = False,
+    bounded_probability_target: bool = False,
 ) -> tuple[RelBenchFrameStore, pd.DataFrame, pd.DataFrame, dict[str, float] | None, dict[str, float] | None, int, list[str], str]:
     model_backend = selected_model_backend(override=model_backend)
     materialized: list[str] = []
@@ -790,13 +838,14 @@ def run_rel_trial_regression_task(
             yield batch
 
     print("model_backend:", model_backend, flush=True)
+    val_target = df_val[target].astype("float64")
     if model_backend == "tabpfn":
         model, best_val_mae, val_predictions = fit_tabpfn_regressor(
             train_batches,
             feature_columns,
             target,
             df_val,
-            df_val[target].astype("float64"),
+            val_target,
         )
         print(
             "tabpfn_version:",
@@ -805,24 +854,89 @@ def run_rel_trial_regression_task(
         )
         print("tabpfn_validation_mae:", best_val_mae, flush=True)
         test_inputs = df_test[feature_columns]
+        test_predictions = np.asarray(model.predict(test_inputs), dtype="float64")
+        if bounded_probability_target:
+            val_predictions = np.clip(val_predictions, 0.0, 1.0)
+            test_predictions = np.clip(test_predictions, 0.0, 1.0)
+            print("bounded_prediction_selection:", "tabpfn_regression", flush=True)
     else:
-        model, best_config, best_val_mae = fit_tuned_regressor_incremental(
+        regression_model, best_config, best_val_mae = fit_tuned_regressor_incremental(
             train_batches,
             feature_columns,
             target,
             df_val[feature_columns].fillna(0),
-            df_val[target].astype("float64"),
+            val_target,
             batch_count=len(train_store.part_paths),
             model_backend=model_backend,
         )
         print("catboost_config:", best_config, flush=True)
         print("catboost_validation_mae:", best_val_mae, flush=True)
-        print("catboost_best_iteration:", model.get_best_iteration(), flush=True)
+        print(
+            "catboost_best_iteration:",
+            regression_model.get_best_iteration(),
+            flush=True,
+        )
         val_inputs = df_val[feature_columns].fillna(0)
         test_inputs = df_test[feature_columns].fillna(0)
-        val_predictions = np.asarray(model.predict(val_inputs), dtype="float64")
+        regression_val_predictions = np.asarray(
+            regression_model.predict(val_inputs),
+            dtype="float64",
+        )
 
-    test_predictions = np.asarray(model.predict(test_inputs), dtype="float64")
+        if bounded_probability_target:
+            probability_model, probability_config, probability_val_mae = (
+                fit_tuned_cross_entropy_model_incremental(
+                    train_batches,
+                    feature_columns,
+                    target,
+                    val_inputs,
+                    val_target,
+                    batch_count=len(train_store.part_paths),
+                )
+            )
+            probability_val_predictions = np.asarray(
+                probability_model.predict_proba(val_inputs)[:, 1],
+                dtype="float64",
+            )
+            selected_name, val_predictions, candidate_mae = (
+                select_bounded_probability_candidate(
+                    val_target,
+                    regression_val_predictions,
+                    probability_val_predictions,
+                )
+            )
+            print("catboost_probability_config:", probability_config, flush=True)
+            print(
+                "catboost_probability_validation_mae:",
+                probability_val_mae,
+                flush=True,
+            )
+            print(
+                "catboost_probability_best_iteration:",
+                probability_model.get_best_iteration(),
+                flush=True,
+            )
+            print("bounded_candidate_validation_mae:", candidate_mae, flush=True)
+            print("bounded_prediction_selection:", selected_name, flush=True)
+
+            regression_test_predictions = np.asarray(
+                regression_model.predict(test_inputs),
+                dtype="float64",
+            )
+            probability_test_predictions = np.asarray(
+                probability_model.predict_proba(test_inputs)[:, 1],
+                dtype="float64",
+            )
+            test_predictions = bounded_probability_candidates(
+                regression_test_predictions,
+                probability_test_predictions,
+            )[selected_name]
+        else:
+            val_predictions = regression_val_predictions
+            test_predictions = np.asarray(
+                regression_model.predict(test_inputs),
+                dtype="float64",
+            )
     val_metrics = add_nmae(
         split_tasks["val"].evaluate(
             val_predictions,

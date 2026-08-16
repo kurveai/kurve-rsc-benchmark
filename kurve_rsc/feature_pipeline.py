@@ -275,6 +275,70 @@ def fit_tuned_regressor(
     return best_model, best_config, best_mae
 
 
+def fit_tuned_cross_entropy_model(
+    train_inputs: pd.DataFrame,
+    train_target: pd.Series,
+    val_inputs: pd.DataFrame,
+    val_target: pd.Series,
+    *,
+    configs: Sequence[dict[str, Any]] = REGRESSOR_CONFIGS,
+) -> tuple[CatBoostClassifier, dict[str, Any], float]:
+    """Fit a probability model for a fractional target in ``[0, 1]``.
+
+    CatBoost's ``CrossEntropy`` objective accepts soft labels, unlike
+    ``Logloss``. Configuration selection remains aligned with RelBench by
+    comparing the resulting probabilities with validation MAE.
+    """
+
+    train_values = train_target.to_numpy(dtype="float64")
+    val_values = val_target.to_numpy(dtype="float64")
+    if (
+        not np.isfinite(train_values).all()
+        or not np.isfinite(val_values).all()
+        or np.any((train_values < 0.0) | (train_values > 1.0))
+        or np.any((val_values < 0.0) | (val_values > 1.0))
+    ):
+        raise ValueError("Cross-entropy targets must be finite and lie in [0, 1]")
+
+    best_model: CatBoostClassifier | None = None
+    best_config: dict[str, Any] | None = None
+    best_mae = float("inf")
+    for config in configs:
+        model = CatBoostClassifier(
+            iterations=int(config["iterations"]),
+            depth=int(config["depth"]),
+            learning_rate=float(config["learning_rate"]),
+            l2_leaf_reg=float(config["l2_leaf_reg"]),
+            loss_function="CrossEntropy",
+            eval_metric="CrossEntropy",
+            random_seed=42,
+            random_strength=1.0,
+            bagging_temperature=1.0,
+            verbose=False,
+            allow_writing_files=False,
+        )
+        model.fit(
+            train_inputs,
+            train_target,
+            eval_set=(val_inputs, val_target),
+            use_best_model=True,
+            early_stopping_rounds=200,
+        )
+        predictions = np.asarray(
+            model.predict_proba(val_inputs)[:, 1],
+            dtype="float64",
+        )
+        mae = float(mean_absolute_error(val_values, predictions))
+        if mae < best_mae:
+            best_model = model
+            best_config = config
+            best_mae = mae
+
+    if best_model is None or best_config is None:
+        raise RuntimeError("CatBoost cross-entropy tuning produced no model")
+    return best_model, best_config, best_mae
+
+
 def prepare_tabpfn_inputs(
     frame: pd.DataFrame,
     feature_columns: Sequence[str],
@@ -664,6 +728,74 @@ def fit_incremental_regressor(
     return model, float(mean_absolute_error(val_target.to_numpy(dtype="float64"), predictions))
 
 
+def fit_incremental_cross_entropy_model(
+    train_batch_factory: Callable[[], Iterator[pd.DataFrame]],
+    feature_columns: Sequence[str],
+    target_column: str,
+    val_inputs: pd.DataFrame,
+    val_target: pd.Series,
+    *,
+    batch_count: int,
+    config: dict[str, Any],
+    train_all_at_once: bool | None = None,
+    _report_training_mode: bool = True,
+) -> tuple[CatBoostClassifier, float]:
+    """Fit one fractional-label probability model jointly or incrementally."""
+
+    if train_all_at_once_enabled(train_all_at_once):
+        if _report_training_mode:
+            print("probability_training_mode: all_at_once", flush=True)
+        train_inputs, train_target = _materialize_tabpfn_training_data(
+            train_batch_factory,
+            feature_columns,
+            target_column,
+        )
+        model, _, mae = fit_tuned_cross_entropy_model(
+            train_inputs,
+            train_target,
+            val_inputs,
+            val_target,
+            configs=(config,),
+        )
+        return model, mae
+
+    if _report_training_mode:
+        print("probability_training_mode: incremental", flush=True)
+
+    iterations = max(1, ceil(int(config["iterations"]) / max(1, batch_count)))
+    params = _incremental_model_params(config, "CrossEntropy", iterations)
+    model: CatBoostClassifier | None = None
+    for batch in train_batch_factory():
+        target = batch[target_column].astype("float64")
+        if target.nunique(dropna=True) < 2:
+            continue
+        if (
+            not np.isfinite(target.to_numpy()).all()
+            or ((target < 0.0) | (target > 1.0)).any()
+        ):
+            raise ValueError(
+                "Cross-entropy targets must be finite and lie in [0, 1]"
+            )
+        inputs = batch.reindex(columns=list(feature_columns), fill_value=0).fillna(0)
+        next_model = CatBoostClassifier(**params)
+        next_model.fit(
+            inputs,
+            target,
+            init_model=model,
+            use_best_model=False,
+        )
+        model = next_model
+
+    if model is None:
+        raise RuntimeError(
+            "Incremental cross-entropy model received no batch with varying targets"
+        )
+    predictions = np.asarray(model.predict_proba(val_inputs)[:, 1], dtype="float64")
+    return model, float(
+        mean_absolute_error(val_target.to_numpy(dtype="float64"), predictions)
+    )
+
+
 def fit_tuned_classifier_incremental(
     train_batch_factory: Callable[[], Iterator[pd.DataFrame]],
     feature_columns: Sequence[str],
@@ -796,4 +928,55 @@ def fit_tuned_regressor_incremental(
             best_model, best_config, best_mae = model, config, mae
     if best_model is None or best_config is None:
         raise RuntimeError("Incremental regressor tuning produced no model")
+    return best_model, best_config, best_mae
+
+
+def fit_tuned_cross_entropy_model_incremental(
+    train_batch_factory: Callable[[], Iterator[pd.DataFrame]],
+    feature_columns: Sequence[str],
+    target_column: str,
+    val_inputs: pd.DataFrame,
+    val_target: pd.Series,
+    *,
+    batch_count: int,
+    configs: Sequence[dict[str, Any]] = REGRESSOR_CONFIGS,
+    train_all_at_once: bool | None = None,
+) -> tuple[CatBoostClassifier, dict[str, Any], float]:
+    """Tune a fractional-label probability model using validation MAE."""
+
+    if train_all_at_once_enabled(train_all_at_once):
+        print("probability_training_mode: all_at_once", flush=True)
+        train_inputs, train_target = _materialize_tabpfn_training_data(
+            train_batch_factory,
+            feature_columns,
+            target_column,
+        )
+        return fit_tuned_cross_entropy_model(
+            train_inputs,
+            train_target,
+            val_inputs,
+            val_target,
+            configs=configs,
+        )
+
+    print("probability_training_mode: incremental", flush=True)
+    best_model: CatBoostClassifier | None = None
+    best_config: dict[str, Any] | None = None
+    best_mae = float("inf")
+    for config in configs:
+        model, mae = fit_incremental_cross_entropy_model(
+            train_batch_factory,
+            feature_columns,
+            target_column,
+            val_inputs,
+            val_target,
+            batch_count=batch_count,
+            config=config,
+            train_all_at_once=False,
+            _report_training_mode=False,
+        )
+        if mae < best_mae:
+            best_model, best_config, best_mae = model, config, mae
+    if best_model is None or best_config is None:
+        raise RuntimeError("Incremental cross-entropy tuning produced no model")
     return best_model, best_config, best_mae

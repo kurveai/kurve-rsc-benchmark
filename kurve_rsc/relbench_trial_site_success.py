@@ -36,6 +36,7 @@ def run_rel_trial_site_success(
         max_train_frames=5,
         model_backend=model_backend,
         use_feature_manifest=use_feature_manifest,
+        bounded_probability_target=True,
     )
 
 
