@@ -22,6 +22,12 @@ MODEL_BACKEND_ENV = "KURVE_RSC_MODEL_BACKEND"
 TRAIN_ALL_AT_ONCE_ENV = "KURVE_RSC_TRAIN_ALL_AT_ONCE"
 FEATURE_MANIFEST_ENV = "KURVE_RSC_FEATURE_MANIFEST"
 SUBMISSION_DIR_ENV = "KURVE_RSC_SUBMISSION_DIR"
+FEATURE_MANIFEST_TASKS = frozenset(
+    {
+        "relbench_trial_study_outcome.py",
+        "relbench_trial_site_success.py",
+    }
+)
 
 CLASSIFICATION_TASKS = (
     "relbench_amazon_user_churn.py",
@@ -196,6 +202,12 @@ def expected_submission_filenames(task_type: str) -> set[str]:
     }
 
 
+def feature_manifest_enabled_for_task(task_name: str, requested: bool) -> bool:
+    """Return whether run_all should enable manifests for one task process."""
+
+    return requested and task_name in FEATURE_MANIFEST_TASKS
+
+
 def prepare_submission_dir(path: Path, task_type: str) -> None:
     path.mkdir(parents=True, exist_ok=True)
     expected = expected_submission_filenames(task_type)
@@ -217,7 +229,11 @@ def run_task(task_name: str, args: argparse.Namespace, log_path: Path) -> dict[s
     env[SINGLE_TRAIN_PERIOD_ENV] = "1" if args.single_train_period else "0"
     env[MODEL_BACKEND_ENV] = "tabpfn" if args.tabpfn else "catboost"
     env[TRAIN_ALL_AT_ONCE_ENV] = "1" if args.train_all_at_once else "0"
-    env[FEATURE_MANIFEST_ENV] = "1" if args.feature_manifest else "0"
+    env[FEATURE_MANIFEST_ENV] = (
+        "1"
+        if feature_manifest_enabled_for_task(task_name, args.feature_manifest)
+        else "0"
+    )
     if args.submission_dir is not None:
         env[SUBMISSION_DIR_ENV] = str(args.submission_dir)
     else:
