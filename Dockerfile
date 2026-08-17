@@ -5,7 +5,7 @@ COPY . /app
 
 RUN python -m pip install --upgrade pip \
     && python -m pip install --no-cache-dir \
-        "graphreduce==1.9.17" \
+        "graphreduce==1.10.2" \
         "relbench==2.1.1" \
         "catboost==1.2.10" \
         "tabpfn==8.1.0" \

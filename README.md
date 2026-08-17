@@ -15,7 +15,7 @@ task runners, metrics, reports, and reproducibility checks.
 
 ## Environment
 
-GraphReduce is installed from the published `graphreduce==1.10.1` package.
+GraphReduce is installed from the published `graphreduce==1.10.2` package.
 No neighboring GraphReduce source checkout is required.
 
 ```bash
