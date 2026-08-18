@@ -37,6 +37,7 @@ def run_rel_trial_site_success(
         model_backend=model_backend,
         use_feature_manifest=use_feature_manifest,
         bounded_probability_target=True,
+        include_categorical_features=True,
     )
 
 

@@ -116,6 +116,7 @@ def test_single_config_regressor_honors_joint_training(monkeypatch) -> None:
         pd.Series([2.5]),
         batch_count=2,
         config=config,
+        cat_features=[0],
         train_all_at_once=True,
     )
 
@@ -124,6 +125,7 @@ def test_single_config_regressor_honors_joint_training(monkeypatch) -> None:
     assert captured["train_inputs"]["feature"].tolist() == [1.0, 3.0]
     assert captured["train_target"].tolist() == [2.0, 4.0]
     assert captured["kwargs"]["configs"] == (config,)
+    assert captured["kwargs"]["cat_features"] == [0]
 
 
 def test_cross_entropy_fit_materializes_fractional_training_targets(monkeypatch) -> None:
@@ -155,6 +157,7 @@ def test_cross_entropy_fit_materializes_fractional_training_targets(monkeypatch)
             pd.DataFrame({"feature": [1.5, 3.5]}),
             pd.Series([0.2, 0.8]),
             batch_count=2,
+            cat_features=[0],
             train_all_at_once=True,
         )
     )
@@ -164,6 +167,7 @@ def test_cross_entropy_fit_materializes_fractional_training_targets(monkeypatch)
     assert mae == 0.2
     assert captured["train_inputs"]["feature"].tolist() == [1.0, 2.0, 3.0, 4.0]
     assert captured["train_target"].tolist() == [0.0, 0.25, 0.75, 1.0]
+    assert captured["kwargs"]["cat_features"] == [0]
 
 
 def test_cli_flags_enable_joint_training() -> None:

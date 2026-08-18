@@ -221,6 +221,7 @@ def fit_tuned_regressor(
     val_inputs: pd.DataFrame,
     val_target: pd.Series,
     *,
+    cat_features: Sequence[int] | None = None,
     configs: Sequence[dict[str, Any]] = REGRESSOR_CONFIGS,
     model_backend: str | None = None,
 ) -> tuple[Any, dict[str, Any], float]:
@@ -259,6 +260,7 @@ def fit_tuned_regressor(
         model.fit(
             train_inputs,
             train_target,
+            cat_features=cat_features,
             eval_set=(val_inputs, val_target),
             use_best_model=True,
             early_stopping_rounds=200,
@@ -281,6 +283,7 @@ def fit_tuned_cross_entropy_model(
     val_inputs: pd.DataFrame,
     val_target: pd.Series,
     *,
+    cat_features: Sequence[int] | None = None,
     configs: Sequence[dict[str, Any]] = REGRESSOR_CONFIGS,
 ) -> tuple[CatBoostClassifier, dict[str, Any], float]:
     """Fit a probability model for a fractional target in ``[0, 1]``.
@@ -320,6 +323,7 @@ def fit_tuned_cross_entropy_model(
         model.fit(
             train_inputs,
             train_target,
+            cat_features=cat_features,
             eval_set=(val_inputs, val_target),
             use_best_model=True,
             early_stopping_rounds=200,
@@ -659,6 +663,7 @@ def fit_incremental_regressor(
     *,
     batch_count: int,
     config: dict[str, Any],
+    cat_features: Sequence[int] | None = None,
     model_backend: str | None = None,
     train_all_at_once: bool | None = None,
     _report_training_mode: bool = True,
@@ -691,6 +696,7 @@ def fit_incremental_regressor(
             train_target,
             val_inputs,
             val_target,
+            cat_features=cat_features,
             configs=(config,),
             model_backend=backend,
         )
@@ -715,6 +721,7 @@ def fit_incremental_regressor(
         next_model.fit(
             inputs,
             target.astype("float64"),
+            cat_features=cat_features,
             init_model=model,
             use_best_model=False,
         )
@@ -737,6 +744,7 @@ def fit_incremental_cross_entropy_model(
     *,
     batch_count: int,
     config: dict[str, Any],
+    cat_features: Sequence[int] | None = None,
     train_all_at_once: bool | None = None,
     _report_training_mode: bool = True,
 ) -> tuple[CatBoostClassifier, float]:
@@ -755,6 +763,7 @@ def fit_incremental_cross_entropy_model(
             train_target,
             val_inputs,
             val_target,
+            cat_features=cat_features,
             configs=(config,),
         )
         return model, mae
@@ -781,6 +790,7 @@ def fit_incremental_cross_entropy_model(
         next_model.fit(
             inputs,
             target,
+            cat_features=cat_features,
             init_model=model,
             use_best_model=False,
         )
@@ -875,6 +885,7 @@ def fit_tuned_regressor_incremental(
     val_target: pd.Series,
     *,
     batch_count: int,
+    cat_features: Sequence[int] | None = None,
     configs: Sequence[dict[str, Any]] = REGRESSOR_CONFIGS,
     model_backend: str | None = None,
     train_all_at_once: bool | None = None,
@@ -903,6 +914,7 @@ def fit_tuned_regressor_incremental(
             train_target,
             val_inputs,
             val_target,
+            cat_features=cat_features,
             configs=configs,
             model_backend=backend,
         )
@@ -920,6 +932,7 @@ def fit_tuned_regressor_incremental(
             val_target,
             batch_count=batch_count,
             config=config,
+            cat_features=cat_features,
             model_backend=backend,
             train_all_at_once=False,
             _report_training_mode=False,
@@ -939,6 +952,7 @@ def fit_tuned_cross_entropy_model_incremental(
     val_target: pd.Series,
     *,
     batch_count: int,
+    cat_features: Sequence[int] | None = None,
     configs: Sequence[dict[str, Any]] = REGRESSOR_CONFIGS,
     train_all_at_once: bool | None = None,
 ) -> tuple[CatBoostClassifier, dict[str, Any], float]:
@@ -956,6 +970,7 @@ def fit_tuned_cross_entropy_model_incremental(
             train_target,
             val_inputs,
             val_target,
+            cat_features=cat_features,
             configs=configs,
         )
 
@@ -972,6 +987,7 @@ def fit_tuned_cross_entropy_model_incremental(
             val_target,
             batch_count=batch_count,
             config=config,
+            cat_features=cat_features,
             train_all_at_once=False,
             _report_training_mode=False,
         )

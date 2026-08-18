@@ -49,6 +49,52 @@ from relbench_feature_manifest import (
 LOOKBACK_START = datetime.datetime(2000, 1, 1)
 SITE_SUCCESS_FEATURE_FAMILIES = ("base", "semantic", "context")
 
+# Point-in-time-valid source columns used by the site-success graph.  Keep
+# free-form study text out of this compact example, but retain the structured
+# trial design, regulatory, sponsor, indication, intervention, and geography
+# signals that RelBench makes available at prediction time.
+SITE_STUDY_FEATURE_COLUMNS = (
+    "enrollment",
+    "number_of_arms",
+    "number_of_groups",
+    "study_type",
+    "phase",
+    "enrollment_type",
+    "source_class",
+    "has_dmc",
+    "is_fda_regulated_drug",
+    "is_fda_regulated_device",
+    "is_unapproved_device",
+    "is_ppsd",
+    "is_us_export",
+    "fdaaa801_violation",
+    "plan_to_share_ipd",
+)
+SITE_FACILITY_FEATURE_COLUMNS = ("city", "state", "zip", "country")
+SITE_DESIGN_FEATURE_COLUMNS = (
+    "allocation",
+    "intervention_model",
+    "observational_model",
+    "primary_purpose",
+    "time_perspective",
+    "masking",
+    "subject_masked",
+    "caregiver_masked",
+    "investigator_masked",
+    "outcomes_assessor_masked",
+)
+SITE_ELIGIBILITY_FEATURE_COLUMNS = (
+    "sampling_method",
+    "gender",
+    "minimum_age",
+    "maximum_age",
+    "healthy_volunteers",
+    "gender_based",
+    "adult",
+    "child",
+    "older_adult",
+)
+
 TABLE_NAME_TO_FILENAME = {
     "studies": "studies.parquet",
     "outcomes": "outcomes.parquet",
@@ -466,64 +512,292 @@ def build_site_features(
     feature_manifest_samples: dict[str, pd.DataFrame] | None = None,
     feature_manifest_summary: dict[str, dict[str, int]] | None = None,
 ) -> pd.DataFrame:
+    """Build compact, point-in-time site features from one study-history edge."""
+
     cut_date = _feature_cut_date(task_timestamp)
+    cutoff_sql = cut_date.strftime("%Y-%m-%d %H:%M:%S")
+    task_date_sql = task_timestamp.strftime("%Y-%m-%d %H:%M:%S")
 
-    facilities_cols = _select_columns(table_columns["facilities"], ["facility_id"])
-    facilities_studies_cols = _select_columns(
-        table_columns["facilities_studies"],
-        ["id", "nct_id", "facility_id", "date"],
+    facilities_cols = _select_columns(
+        table_columns["facilities"],
+        ["facility_id"],
+        list(SITE_FACILITY_FEATURE_COLUMNS),
     )
-    studies_cols = _select_columns(
-        table_columns["studies"],
-        ["nct_id", "start_date"],
-        ["enrollment", "number_of_arms", "number_of_groups"],
-    )
-    outcomes_cols = _select_columns(table_columns["outcomes"], ["id", "nct_id", "date"])
-    outcome_analyses_cols = _select_columns(
-        table_columns["outcome_analyses"],
-        ["id", "nct_id", "outcome_id", "date"],
-        [
-            "p_value_modifier",
-            "param_value",
-            "dispersion_value",
-            "p_value",
-            "ci_percent",
-            "ci_lower_limit",
-            "ci_upper_limit",
-            "ci_upper_limit_raw",
-            "ci_lower_limit_raw",
-            "p_value_raw",
-        ],
-    )
-    reported_event_totals_cols = _select_columns(
-        table_columns["reported_event_totals"],
-        ["id", "nct_id", "date"],
-        [
-            "event_type",
-            "classification",
-            "subjects_affected",
-            "subjects_at_risk",
-        ],
-    )
-
     facilities_l = _by_lower(facilities_cols)
-    facilities_studies_l = _by_lower(facilities_studies_cols)
-    studies_l = _by_lower(studies_cols)
-    outcomes_l = _by_lower(outcomes_cols)
-    outcome_analyses_l = _by_lower(outcome_analyses_cols)
-    reported_event_totals_l = _by_lower(reported_event_totals_cols)
 
-    outcome_analysis_annotations = {}
-    if "p_value" in outcome_analyses_l:
-        outcome_analysis_annotations["is_significant"] = (
-            f"{{{outcome_analyses_l['p_value']}}} >= 0 "
-            f"AND {{{outcome_analyses_l['p_value']}}} <= 0.05"
+    # Collapse each many-to-many source at the study level before joining it to
+    # facilities.  The resulting relation has one row per facility/study, so
+    # GraphReduce performs one bounded reduction rather than repeatedly
+    # aggregating a wide, fan-out-prone multi-hop graph.
+    con.execute(
+        f"""
+        CREATE OR REPLACE TEMP VIEW site_study_history_src AS
+        WITH design_latest AS (
+            SELECT * EXCLUDE (_row_number)
+            FROM (
+                SELECT
+                    id,
+                    nct_id,
+                    date,
+                    allocation,
+                    intervention_model,
+                    observational_model,
+                    primary_purpose,
+                    time_perspective,
+                    masking,
+                    subject_masked,
+                    caregiver_masked,
+                    investigator_masked,
+                    outcomes_assessor_masked,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY nct_id ORDER BY date DESC, id DESC
+                    ) AS _row_number
+                FROM designs_src
+                WHERE date < TIMESTAMP '{cutoff_sql}'
+            )
+            WHERE _row_number = 1
+        ),
+        eligibility_latest AS (
+            SELECT * EXCLUDE (_row_number)
+            FROM (
+                SELECT
+                    id,
+                    nct_id,
+                    date,
+                    sampling_method,
+                    gender,
+                    minimum_age,
+                    maximum_age,
+                    healthy_volunteers,
+                    gender_based,
+                    adult,
+                    child,
+                    older_adult,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY nct_id ORDER BY date DESC, id DESC
+                    ) AS _row_number
+                FROM eligibilities_src
+                WHERE date < TIMESTAMP '{cutoff_sql}'
+            )
+            WHERE _row_number = 1
+        ),
+        intervention_summary AS (
+            SELECT
+                rel.nct_id,
+                COUNT(DISTINCT rel.intervention_id) AS intervention_count,
+                MODE(entity.mesh_term) AS intervention_mesh_term
+            FROM interventions_studies_src AS rel
+            LEFT JOIN interventions_src AS entity USING (intervention_id)
+            WHERE rel.date < TIMESTAMP '{cutoff_sql}'
+            GROUP BY rel.nct_id
+        ),
+        condition_summary AS (
+            SELECT
+                rel.nct_id,
+                COUNT(DISTINCT rel.condition_id) AS condition_count,
+                MODE(entity.mesh_term) AS condition_mesh_term
+            FROM conditions_studies_src AS rel
+            LEFT JOIN conditions_src AS entity USING (condition_id)
+            WHERE rel.date < TIMESTAMP '{cutoff_sql}'
+            GROUP BY rel.nct_id
+        ),
+        sponsor_summary AS (
+            SELECT
+                rel.nct_id,
+                COUNT(DISTINCT rel.sponsor_id) AS sponsor_count,
+                MODE(entity.name) AS sponsor_name,
+                MODE(entity.agency_class) AS sponsor_agency_class,
+                MODE(rel.lead_or_collaborator) AS sponsor_role
+            FROM sponsors_studies_src AS rel
+            LEFT JOIN sponsors_src AS entity USING (sponsor_id)
+            WHERE rel.date < TIMESTAMP '{cutoff_sql}'
+            GROUP BY rel.nct_id
+        ),
+        trial_outcomes AS (
+            SELECT
+                analysis.nct_id,
+                analysis.date,
+                MIN(
+                    CASE WHEN analysis.p_value < 0.05 THEN 1.0 ELSE 0.0 END
+                ) AS is_successful
+            FROM outcome_analyses_src AS analysis
+            INNER JOIN outcomes_src AS outcome
+                ON analysis.outcome_id = outcome.id
+            WHERE analysis.date < TIMESTAMP '{cutoff_sql}'
+                AND (
+                    analysis.p_value_modifier IS NULL
+                    OR analysis.p_value_modifier != '>'
+                )
+                AND analysis.p_value BETWEEN 0 AND 1
+                AND outcome.outcome_type = 'Primary'
+            GROUP BY analysis.nct_id, analysis.date
+        ),
+        outcome_summary AS (
+            SELECT
+                nct_id,
+                COUNT(*) AS historical_outcome_count,
+                AVG(is_successful) AS historical_success_rate
+            FROM trial_outcomes
+            GROUP BY nct_id
+        ),
+        event_summary AS (
+            SELECT
+                nct_id,
+                COUNT(*) AS reported_event_count,
+                SUM(subjects_affected) AS subjects_affected,
+                SUM(subjects_at_risk) AS subjects_at_risk
+            FROM reported_event_totals_src
+            WHERE date < TIMESTAMP '{cutoff_sql}'
+            GROUP BY nct_id
         )
-    reported_event_annotations = {}
-    if "event_type" in reported_event_totals_l:
-        reported_event_annotations["is_serious_or_death"] = (
-            f"{{{reported_event_totals_l['event_type']}}} IN ('serious', 'deaths')"
-        )
+        SELECT
+            relation.id,
+            relation.nct_id,
+            relation.facility_id,
+            relation.date,
+            study.enrollment,
+            study.number_of_arms,
+            study.number_of_groups,
+            study.study_type,
+            study.phase,
+            study.enrollment_type,
+            study.source_class,
+            study.has_dmc,
+            study.is_fda_regulated_drug,
+            study.is_fda_regulated_device,
+            study.is_unapproved_device,
+            study.is_ppsd,
+            study.is_us_export,
+            study.fdaaa801_violation,
+            study.plan_to_share_ipd,
+            design.allocation,
+            design.intervention_model,
+            design.observational_model,
+            design.primary_purpose,
+            design.time_perspective,
+            design.masking,
+            design.subject_masked,
+            design.caregiver_masked,
+            design.investigator_masked,
+            design.outcomes_assessor_masked,
+            eligibility.sampling_method,
+            eligibility.gender,
+            eligibility.minimum_age,
+            eligibility.maximum_age,
+            eligibility.healthy_volunteers,
+            eligibility.gender_based,
+            eligibility.adult,
+            eligibility.child,
+            eligibility.older_adult,
+            intervention.intervention_count,
+            intervention.intervention_mesh_term,
+            condition.condition_count,
+            condition.condition_mesh_term,
+            sponsor.sponsor_count,
+            sponsor.sponsor_name,
+            sponsor.sponsor_agency_class,
+            sponsor.sponsor_role,
+            outcome.historical_outcome_count,
+            outcome.historical_success_rate,
+            event.reported_event_count,
+            event.subjects_affected,
+            event.subjects_at_risk
+        FROM facilities_studies_src AS relation
+        INNER JOIN studies_src AS study USING (nct_id)
+        LEFT JOIN design_latest AS design USING (nct_id)
+        LEFT JOIN eligibility_latest AS eligibility USING (nct_id)
+        LEFT JOIN intervention_summary AS intervention USING (nct_id)
+        LEFT JOIN condition_summary AS condition USING (nct_id)
+        LEFT JOIN sponsor_summary AS sponsor USING (nct_id)
+        LEFT JOIN outcome_summary AS outcome USING (nct_id)
+        LEFT JOIN event_summary AS event USING (nct_id)
+        WHERE relation.date < TIMESTAMP '{cutoff_sql}'
+            AND study.start_date <= TIMESTAMP '{task_date_sql}'
+        """
+    )
+    con.execute(
+        f"""
+        CREATE OR REPLACE TEMP VIEW site_history_summary_src AS
+        SELECT
+            facility_id,
+            COUNT(DISTINCT nct_id) AS study_count,
+            AVG(enrollment) AS enrollment_avg,
+            MAX(enrollment) AS enrollment_max,
+            AVG(number_of_arms) AS number_of_arms_avg,
+            MAX(number_of_arms) AS number_of_arms_max,
+            AVG(number_of_groups) AS number_of_groups_avg,
+            MAX(number_of_groups) AS number_of_groups_max,
+            ARG_MAX(study_type, date) AS latest_study_type,
+            ARG_MAX(phase, date) AS latest_phase,
+            ARG_MAX(enrollment_type, date) AS latest_enrollment_type,
+            ARG_MAX(source_class, date) AS latest_source_class,
+            AVG(CASE WHEN has_dmc THEN 1.0 ELSE 0.0 END) AS has_dmc_share,
+            AVG(
+                CASE WHEN is_fda_regulated_drug THEN 1.0 ELSE 0.0 END
+            ) AS fda_regulated_drug_share,
+            AVG(
+                CASE WHEN is_fda_regulated_device THEN 1.0 ELSE 0.0 END
+            ) AS fda_regulated_device_share,
+            AVG(
+                CASE WHEN is_unapproved_device THEN 1.0 ELSE 0.0 END
+            ) AS unapproved_device_share,
+            AVG(CASE WHEN is_ppsd THEN 1.0 ELSE 0.0 END) AS ppsd_share,
+            AVG(CASE WHEN is_us_export THEN 1.0 ELSE 0.0 END) AS us_export_share,
+            AVG(
+                CASE WHEN fdaaa801_violation THEN 1.0 ELSE 0.0 END
+            ) AS fdaaa801_violation_share,
+            ARG_MAX(plan_to_share_ipd, date) AS latest_plan_to_share_ipd,
+            ARG_MAX(allocation, date) AS latest_allocation,
+            ARG_MAX(intervention_model, date) AS latest_intervention_model,
+            ARG_MAX(observational_model, date) AS latest_observational_model,
+            ARG_MAX(primary_purpose, date) AS latest_primary_purpose,
+            ARG_MAX(time_perspective, date) AS latest_time_perspective,
+            ARG_MAX(masking, date) AS latest_masking,
+            AVG(CASE WHEN subject_masked THEN 1.0 ELSE 0.0 END) AS subject_masked_share,
+            AVG(CASE WHEN caregiver_masked THEN 1.0 ELSE 0.0 END) AS caregiver_masked_share,
+            AVG(
+                CASE WHEN investigator_masked THEN 1.0 ELSE 0.0 END
+            ) AS investigator_masked_share,
+            AVG(
+                CASE WHEN outcomes_assessor_masked THEN 1.0 ELSE 0.0 END
+            ) AS outcomes_assessor_masked_share,
+            ARG_MAX(sampling_method, date) AS latest_sampling_method,
+            ARG_MAX(gender, date) AS latest_gender,
+            ARG_MAX(minimum_age, date) AS latest_minimum_age,
+            ARG_MAX(maximum_age, date) AS latest_maximum_age,
+            ARG_MAX(healthy_volunteers, date) AS latest_healthy_volunteers,
+            AVG(CASE WHEN gender_based THEN 1.0 ELSE 0.0 END) AS gender_based_share,
+            AVG(CASE WHEN adult THEN 1.0 ELSE 0.0 END) AS adult_share,
+            AVG(CASE WHEN child THEN 1.0 ELSE 0.0 END) AS child_share,
+            AVG(CASE WHEN older_adult THEN 1.0 ELSE 0.0 END) AS older_adult_share,
+            SUM(intervention_count) AS intervention_count,
+            ARG_MAX(intervention_mesh_term, date) AS latest_intervention_mesh_term,
+            SUM(condition_count) AS condition_count,
+            ARG_MAX(condition_mesh_term, date) AS latest_condition_mesh_term,
+            SUM(sponsor_count) AS sponsor_count,
+            ARG_MAX(sponsor_name, date) AS latest_sponsor_name,
+            ARG_MAX(sponsor_agency_class, date) AS latest_sponsor_agency_class,
+            ARG_MAX(sponsor_role, date) AS latest_sponsor_role,
+            SUM(historical_outcome_count) AS historical_outcome_count,
+            SUM(
+                historical_success_rate * historical_outcome_count
+            ) / NULLIF(SUM(historical_outcome_count), 0) AS historical_success_rate,
+            SUM(reported_event_count) AS reported_event_count,
+            SUM(subjects_affected) AS subjects_affected,
+            SUM(subjects_at_risk) AS subjects_at_risk,
+            DATE_DIFF(
+                'day', MAX(date), TIMESTAMP '{cutoff_sql}'
+            ) AS days_since_latest_study
+        FROM site_study_history_src
+        GROUP BY facility_id
+        """
+    )
+    history_cols = (
+        con.sql("SELECT * FROM site_history_summary_src LIMIT 0")
+        .to_df()
+        .columns.tolist()
+    )
+    history_l = _by_lower(history_cols)
 
     facilities = DuckdbNode(
         fpath="facilities_src",
@@ -532,118 +806,36 @@ def build_site_features(
         date_key=None,
         columns=facilities_cols,
     )
-    facilities_studies = DuckdbNode(
-        fpath="facilities_studies_src",
-        prefix="fst",
-        pk=facilities_studies_l["id"],
-        date_key=facilities_studies_l["date"],
-        columns=facilities_studies_cols,
-    )
-    studies = DuckdbNode(
-        fpath="studies_src",
-        prefix="std",
-        pk=studies_l["nct_id"],
-        date_key=studies_l["start_date"],
-        columns=studies_cols,
-    )
-    outcomes = DuckdbNode(
-        fpath="outcomes_src",
-        prefix="out",
-        pk=outcomes_l["id"],
-        date_key="date",
-        columns=outcomes_cols,
-    )
-    outcome_analyses = DuckdbNode(
-        fpath="outcome_analyses_src",
-        prefix="oa",
-        pk=outcome_analyses_l["id"],
-        date_key=outcome_analyses_l["date"],
-        columns=outcome_analyses_cols,
-        feature_family_max_columns=4,
-        categorical_top_k=5,
-        context_keys=(outcome_analyses_l["nct_id"], outcome_analyses_l["outcome_id"]),
-        annotation_expressions=outcome_analysis_annotations,
-    )
-    reported_event_totals = DuckdbNode(
-        fpath="reported_event_totals_src",
-        prefix="evt",
-        pk=reported_event_totals_l["id"],
-        date_key=reported_event_totals_l["date"],
-        columns=reported_event_totals_cols,
-        feature_family_max_columns=4,
-        categorical_top_k=5,
-        context_keys=(reported_event_totals_l["nct_id"],),
-        annotation_expressions=reported_event_annotations,
+    history = DuckdbNode(
+        fpath="site_history_summary_src",
+        prefix="hst",
+        pk=history_l["facility_id"],
+        date_key=None,
+        columns=history_cols,
     )
 
-    nodes = [
-        facilities,
-        facilities_studies,
-        studies,
-        outcomes,
-        outcome_analyses,
-        reported_event_totals,
-    ]
-    set_feature_families(
-        [outcome_analyses, reported_event_totals], SITE_SUCCESS_FEATURE_FAMILIES
-    )
     if feature_manifest_samples is not None:
         current_summary = apply_feature_manifests(
-            {
-                "facilities": facilities,
-                "facilities_studies": facilities_studies,
-                "studies": studies,
-                "outcomes": outcomes,
-                "outcome_analyses": outcome_analyses,
-                "reported_event_totals": reported_event_totals,
-            },
+            {"facilities": facilities},
             TRIAL_FEATURE_MANIFEST_SOURCES,
             feature_manifest_samples,
         )
         if feature_manifest_summary is not None and not feature_manifest_summary:
             feature_manifest_summary.update(current_summary)
+
     gr = _graph(
         con,
         f"rel_trial_site_features_{task_timestamp.date()}",
         facilities,
-        nodes,
+        [facilities, history],
         cut_date,
     )
-
     gr.add_entity_edge(
         facilities,
-        facilities_studies,
+        history,
         facilities_l["facility_id"],
-        facilities_studies_l["facility_id"],
-        reduce=True,
-    )
-    gr.add_entity_edge(
-        facilities_studies,
-        studies,
-        facilities_studies_l["nct_id"],
-        studies_l["nct_id"],
+        history_l["facility_id"],
         reduce=False,
-    )
-    gr.add_entity_edge(
-        facilities_studies,
-        outcomes,
-        facilities_studies_l["nct_id"],
-        outcomes_l["nct_id"],
-        reduce=True,
-    )
-    gr.add_entity_edge(
-        facilities_studies,
-        outcome_analyses,
-        facilities_studies_l["nct_id"],
-        outcome_analyses_l["nct_id"],
-        reduce=True,
-    )
-    gr.add_entity_edge(
-        facilities_studies,
-        reported_event_totals,
-        facilities_studies_l["nct_id"],
-        reported_event_totals_l["nct_id"],
-        reduce=True,
     )
 
     gr.do_transformations_sql()
@@ -719,6 +911,66 @@ def select_shared_numeric_features(
     ]
 
 
+def select_shared_model_features(
+    train_df: pd.DataFrame,
+    val_df: pd.DataFrame,
+    test_df: pd.DataFrame,
+    target_col: str,
+    excluded_cols: set[str],
+) -> list[str]:
+    """Select stable numeric and categorical columns for the model backend."""
+
+    common_columns = set(train_df.columns) & set(val_df.columns) & set(test_df.columns)
+    return [
+        column
+        for column in train_df.columns
+        if column != target_col
+        and column not in excluded_cols
+        and "label" not in column.lower()
+        and not column.lower().endswith("_id")
+        and column in common_columns
+        and not pd.api.types.is_datetime64_any_dtype(train_df[column])
+        and (
+            pd.api.types.is_numeric_dtype(train_df[column])
+            or pd.api.types.is_bool_dtype(train_df[column])
+            or pd.api.types.is_object_dtype(train_df[column])
+            or pd.api.types.is_string_dtype(train_df[column])
+            or isinstance(train_df[column].dtype, pd.CategoricalDtype)
+        )
+    ]
+
+
+def prepare_model_inputs(
+    frame: pd.DataFrame,
+    feature_columns: list[str],
+    categorical_indices: list[int] | None = None,
+) -> tuple[pd.DataFrame, list[int]]:
+    """Freeze the training categorical layout and normalize missing values."""
+
+    inputs = frame.reindex(columns=feature_columns).copy()
+    frozen_categorical_indices = (
+        None if categorical_indices is None else set(categorical_indices)
+    )
+    inferred_categorical_indices: list[int] = []
+    for index, column in enumerate(feature_columns):
+        series = inputs[column]
+        is_categorical = (
+            index in frozen_categorical_indices
+            if frozen_categorical_indices is not None
+            else (
+                pd.api.types.is_object_dtype(series)
+                or pd.api.types.is_string_dtype(series)
+                or isinstance(series.dtype, pd.CategoricalDtype)
+            )
+        )
+        if is_categorical:
+            inputs[column] = series.fillna("__missing__").astype(str)
+            inferred_categorical_indices.append(index)
+        else:
+            inputs[column] = pd.to_numeric(series, errors="coerce").fillna(0)
+    return inputs, inferred_categorical_indices
+
+
 def bounded_probability_candidates(
     regression_predictions: np.ndarray,
     probability_predictions: np.ndarray,
@@ -773,6 +1025,7 @@ def run_rel_trial_regression_task(
     model_backend: str | None = None,
     use_feature_manifest: bool = False,
     bounded_probability_target: bool = False,
+    include_categorical_features: bool = False,
 ) -> tuple[RelBenchFrameStore, pd.DataFrame, pd.DataFrame, dict[str, float] | None, dict[str, float] | None, int, list[str], str]:
     model_backend = selected_model_backend(override=model_backend)
     materialized: list[str] = []
@@ -821,7 +1074,12 @@ def run_rel_trial_regression_task(
     target = split_tasks["train"].target_col
 
     train_sample = train_store.sample_frame()
-    feature_columns = select_shared_numeric_features(
+    feature_selector = (
+        select_shared_model_features
+        if include_categorical_features
+        else select_shared_numeric_features
+    )
+    feature_columns = feature_selector(
         train_sample,
         df_val,
         df_test,
@@ -831,11 +1089,27 @@ def run_rel_trial_regression_task(
     if not feature_columns:
         return train_store, df_val, df_test, None, None, 0, materialized, target
 
+    _, categorical_indices = prepare_model_inputs(train_sample, feature_columns)
+    val_inputs, _ = prepare_model_inputs(
+        df_val,
+        feature_columns,
+        categorical_indices,
+    )
+    test_inputs, _ = prepare_model_inputs(
+        df_test,
+        feature_columns,
+        categorical_indices,
+    )
+
     def train_batches():
         for batch in train_store.iter_batches():
-            batch = batch.copy()
-            batch[target] = batch[target].fillna(0).astype("float64")
-            yield batch
+            inputs, _ = prepare_model_inputs(
+                batch,
+                feature_columns,
+                categorical_indices,
+            )
+            inputs[target] = batch[target].fillna(0).astype("float64").to_numpy()
+            yield inputs
 
     print("model_backend:", model_backend, flush=True)
     val_target = df_val[target].astype("float64")
@@ -844,7 +1118,7 @@ def run_rel_trial_regression_task(
             train_batches,
             feature_columns,
             target,
-            df_val,
+            val_inputs,
             val_target,
         )
         print(
@@ -853,7 +1127,6 @@ def run_rel_trial_regression_task(
             flush=True,
         )
         print("tabpfn_validation_mae:", best_val_mae, flush=True)
-        test_inputs = df_test[feature_columns]
         test_predictions = np.asarray(model.predict(test_inputs), dtype="float64")
         if bounded_probability_target:
             val_predictions = np.clip(val_predictions, 0.0, 1.0)
@@ -864,9 +1137,10 @@ def run_rel_trial_regression_task(
             train_batches,
             feature_columns,
             target,
-            df_val[feature_columns].fillna(0),
+            val_inputs,
             val_target,
             batch_count=len(train_store.part_paths),
+            cat_features=categorical_indices,
             model_backend=model_backend,
         )
         print("catboost_config:", best_config, flush=True)
@@ -876,8 +1150,6 @@ def run_rel_trial_regression_task(
             regression_model.get_best_iteration(),
             flush=True,
         )
-        val_inputs = df_val[feature_columns].fillna(0)
-        test_inputs = df_test[feature_columns].fillna(0)
         regression_val_predictions = np.asarray(
             regression_model.predict(val_inputs),
             dtype="float64",
@@ -892,6 +1164,7 @@ def run_rel_trial_regression_task(
                     val_inputs,
                     val_target,
                     batch_count=len(train_store.part_paths),
+                    cat_features=categorical_indices,
                 )
             )
             probability_val_predictions = np.asarray(

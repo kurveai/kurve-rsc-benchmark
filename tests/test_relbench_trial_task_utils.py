@@ -9,15 +9,75 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "kurve_rsc"))
 
 from kurve_rsc import relbench_trial_site_success
 from kurve_rsc.trial_builder import (
+    SITE_DESIGN_FEATURE_COLUMNS,
+    SITE_ELIGIBILITY_FEATURE_COLUMNS,
+    SITE_FACILITY_FEATURE_COLUMNS,
     SITE_SUCCESS_FEATURE_FAMILIES,
+    SITE_STUDY_FEATURE_COLUMNS,
     _select_evenly_spaced_timestamps,
     bounded_probability_candidates,
+    prepare_model_inputs,
+    select_shared_model_features,
     select_bounded_probability_candidate,
 )
 
 
 def test_site_success_uses_compact_feature_families():
     assert SITE_SUCCESS_FEATURE_FAMILIES == ("base", "semantic", "context")
+
+
+def test_site_success_keeps_structured_trial_and_geography_columns():
+    assert {
+        "phase",
+        "source_class",
+        "study_type",
+        "has_dmc",
+        "is_fda_regulated_drug",
+        "is_fda_regulated_device",
+    } <= set(SITE_STUDY_FEATURE_COLUMNS)
+    assert {"city", "state", "zip", "country"} <= set(
+        SITE_FACILITY_FEATURE_COLUMNS
+    )
+    assert {"allocation", "primary_purpose", "masking"} <= set(
+        SITE_DESIGN_FEATURE_COLUMNS
+    )
+    assert {"gender", "minimum_age", "maximum_age", "healthy_volunteers"} <= set(
+        SITE_ELIGIBILITY_FEATURE_COLUMNS
+    )
+
+
+def test_trial_model_features_retain_and_freeze_categoricals():
+    train = pd.DataFrame(
+        {
+            "fac_facility_id": [1, 2],
+            "fac_country": ["United States", None],
+            "std_phase_count": [2, 1],
+            "timestamp": pd.to_datetime(["2020-01-01", "2020-01-01"]),
+            "target": [0.5, 0.7],
+        }
+    )
+    val = train.assign(fac_country=["Canada", "United States"])
+    test = train.assign(fac_country=[None, "Canada"])
+
+    features = select_shared_model_features(
+        train,
+        val,
+        test,
+        "target",
+        {"fac_facility_id"},
+    )
+    train_inputs, categorical_indices = prepare_model_inputs(train, features)
+    test_inputs, replayed_indices = prepare_model_inputs(
+        test,
+        features,
+        categorical_indices,
+    )
+
+    assert features == ["fac_country", "std_phase_count"]
+    assert categorical_indices == [0]
+    assert replayed_indices == categorical_indices
+    assert train_inputs["fac_country"].tolist() == ["United States", "__missing__"]
+    assert test_inputs["fac_country"].tolist() == ["__missing__", "Canada"]
 
 
 def test_trial_training_timestamp_sampling_keeps_full_range():
@@ -80,3 +140,4 @@ def test_site_success_enables_bounded_probability_model_selection(monkeypatch):
     assert result is expected_result
     assert captured["task_name"] == "site-success"
     assert captured["bounded_probability_target"] is True
+    assert captured["include_categorical_features"] is True
