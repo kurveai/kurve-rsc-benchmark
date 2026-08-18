@@ -1,0 +1,194 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">Kurve-RSC relational signal compression architecture</title>
+  <desc id="desc">RelBench relational tables flow through GraphReduce point-in-time relational signal compression into one row per entity, which is modeled with standard CatBoost and evaluated with official RelBench metrics.</desc>
+
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#07111f"/>
+      <stop offset="0.55" stop-color="#0b1728"/>
+      <stop offset="1" stop-color="#111a2e"/>
+    </linearGradient>
+    <linearGradient id="rscPanel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#162b4b"/>
+      <stop offset="1" stop-color="#162139"/>
+    </linearGradient>
+    <linearGradient id="catPanel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#172d2d"/>
+      <stop offset="1" stop-color="#12232a"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#000814" flood-opacity="0.42"/>
+    </filter>
+    <filter id="softGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="7" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <marker id="arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="10" markerHeight="10" orient="auto-start-reverse">
+      <path d="M 1 1 L 11 6 L 1 11 z" fill="#7dd3fc"/>
+    </marker>
+    <marker id="arrowGreen" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="10" markerHeight="10" orient="auto-start-reverse">
+      <path d="M 1 1 L 11 6 L 1 11 z" fill="#6ee7b7"/>
+    </marker>
+  </defs>
+
+  <rect width="1600" height="900" fill="url(#background)"/>
+  <circle cx="1260" cy="120" r="260" fill="#2563eb" opacity="0.06"/>
+  <circle cx="235" cy="820" r="300" fill="#14b8a6" opacity="0.045"/>
+
+  <g font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+    <text x="80" y="82" fill="#f8fafc" font-size="42" font-weight="760" letter-spacing="-1.2">Relational signal compression</text>
+    <text x="80" y="121" fill="#9fb2c8" font-size="20">Kurve-RSC changes the representation—not the downstream model.</text>
+
+    <g transform="translate(80 184)" filter="url(#shadow)">
+      <rect width="310" height="485" rx="28" fill="#111f33" stroke="#30445f" stroke-width="2"/>
+      <rect x="24" y="24" width="93" height="30" rx="15" fill="#1e3a5f"/>
+      <text x="70.5" y="45" fill="#bae6fd" font-size="14" font-weight="700" text-anchor="middle" letter-spacing="1.1">RelBench</text>
+      <text x="24" y="92" fill="#f8fafc" font-size="26" font-weight="720">Relational database</text>
+      <text x="24" y="121" fill="#9fb2c8" font-size="16">Tables retain their natural grain.</text>
+
+      <g transform="translate(24 155)">
+        <rect width="116" height="82" rx="12" fill="#162a43" stroke="#3b82f6" stroke-opacity="0.7"/>
+        <rect width="116" height="23" rx="12" fill="#1d4e80"/>
+        <rect y="12" width="116" height="11" fill="#1d4e80"/>
+        <text x="12" y="17" fill="#dbeafe" font-size="12" font-weight="700">entities</text>
+        <line x1="12" y1="39" x2="101" y2="39" stroke="#526b89"/>
+        <line x1="12" y1="53" x2="88" y2="53" stroke="#526b89"/>
+        <line x1="12" y1="67" x2="97" y2="67" stroke="#526b89"/>
+
+        <rect x="146" width="116" height="82" rx="12" fill="#162a43" stroke="#38bdf8" stroke-opacity="0.7"/>
+        <rect x="146" width="116" height="23" rx="12" fill="#155e75"/>
+        <rect x="146" y="12" width="116" height="11" fill="#155e75"/>
+        <text x="158" y="17" fill="#cffafe" font-size="12" font-weight="700">events</text>
+        <line x1="158" y1="39" x2="247" y2="39" stroke="#526b89"/>
+        <line x1="158" y1="53" x2="233" y2="53" stroke="#526b89"/>
+        <line x1="158" y1="67" x2="253" y2="67" stroke="#526b89"/>
+
+        <rect x="73" y="119" width="116" height="82" rx="12" fill="#162a43" stroke="#a78bfa" stroke-opacity="0.7"/>
+        <rect x="73" y="119" width="116" height="23" rx="12" fill="#513489"/>
+        <rect x="73" y="131" width="116" height="11" fill="#513489"/>
+        <text x="85" y="136" fill="#ede9fe" font-size="12" font-weight="700">context</text>
+        <line x1="85" y1="158" x2="174" y2="158" stroke="#526b89"/>
+        <line x1="85" y1="172" x2="160" y2="172" stroke="#526b89"/>
+        <line x1="85" y1="186" x2="180" y2="186" stroke="#526b89"/>
+
+        <path d="M116 62 C135 62 127 62 146 62" fill="none" stroke="#65b8e8" stroke-width="2"/>
+        <path d="M131 82 C131 101 131 100 131 119" fill="none" stroke="#8b7dd6" stroke-width="2"/>
+        <circle cx="131" cy="62" r="4" fill="#7dd3fc"/>
+        <circle cx="131" cy="101" r="4" fill="#a78bfa"/>
+      </g>
+
+      <g transform="translate(24 389)">
+        <circle cx="8" cy="8" r="5" fill="#38bdf8"/>
+        <text x="24" y="14" fill="#c4d3e3" font-size="15">Official keys and timestamps</text>
+        <circle cx="8" cy="40" r="5" fill="#38bdf8"/>
+        <text x="24" y="46" fill="#c4d3e3" font-size="15">Official labels and splits</text>
+        <circle cx="8" cy="72" r="5" fill="#38bdf8"/>
+        <text x="24" y="78" fill="#c4d3e3" font-size="15">No premature flat join</text>
+      </g>
+    </g>
+
+    <path d="M410 426 C446 426 453 426 487 426" fill="none" stroke="#7dd3fc" stroke-width="4" marker-end="url(#arrow)"/>
+    <text x="449" y="405" fill="#7dd3fc" font-size="13" font-weight="700" text-anchor="middle">SCHEMA</text>
+
+    <g transform="translate(500 155)" filter="url(#shadow)">
+      <rect width="490" height="545" rx="32" fill="url(#rscPanel)" stroke="#3b82f6" stroke-width="2.5"/>
+      <circle cx="423" cy="67" r="34" fill="#0f3b61" stroke="#38bdf8"/>
+      <path d="M407 67 L422 52 L438 67 L422 83 Z" fill="none" stroke="#7dd3fc" stroke-width="3"/>
+      <circle cx="407" cy="67" r="4" fill="#7dd3fc"/>
+      <circle cx="422" cy="52" r="4" fill="#7dd3fc"/>
+      <circle cx="438" cy="67" r="4" fill="#7dd3fc"/>
+      <circle cx="422" cy="83" r="4" fill="#7dd3fc"/>
+
+      <rect x="28" y="26" width="138" height="32" rx="16" fill="#173f6c"/>
+      <text x="97" y="48" fill="#bfdbfe" font-size="14" font-weight="760" text-anchor="middle" letter-spacing="1">GRAPHREDUCE</text>
+      <text x="28" y="99" fill="#f8fafc" font-size="30" font-weight="760">RSC engine</text>
+      <text x="28" y="130" fill="#a9bdd2" font-size="16">Automatic, point-in-time relational reductions</text>
+
+      <g transform="translate(28 168)">
+        <rect width="434" height="86" rx="18" fill="#10233d" stroke="#31557d"/>
+        <circle cx="35" cy="43" r="20" fill="#173e65"/>
+        <path d="M26 43 h18 M35 34 v18" stroke="#7dd3fc" stroke-width="2.5"/>
+        <text x="70" y="36" fill="#eef6ff" font-size="18" font-weight="700">1. Apply the cutoff</text>
+        <text x="70" y="61" fill="#9fb2c8" font-size="15">Keep only information visible at prediction time.</text>
+
+        <rect y="102" width="434" height="86" rx="18" fill="#10233d" stroke="#31557d"/>
+        <circle cx="35" cy="145" r="20" fill="#173e65"/>
+        <path d="M25 139 h20 M29 145 h12 M33 151 h4" stroke="#7dd3fc" stroke-width="2.5" stroke-linecap="round"/>
+        <text x="70" y="138" fill="#eef6ff" font-size="18" font-weight="700">2. Reduce bottom-up</text>
+        <text x="70" y="163" fill="#9fb2c8" font-size="15">Compress one-to-many relations before joining.</text>
+
+        <rect y="204" width="434" height="86" rx="18" fill="#10233d" stroke="#31557d"/>
+        <circle cx="35" cy="247" r="20" fill="#173e65"/>
+        <rect x="25" y="238" width="20" height="18" rx="3" fill="none" stroke="#7dd3fc" stroke-width="2.2"/>
+        <path d="M25 244 h20 M31 238 v18" stroke="#7dd3fc" stroke-width="1.8"/>
+        <text x="70" y="240" fill="#eef6ff" font-size="18" font-weight="700">3. Emit the entity grain</text>
+        <text x="70" y="265" fill="#9fb2c8" font-size="15">One stable, model-ready row per target entity.</text>
+      </g>
+
+      <g transform="translate(28 484)">
+        <rect width="434" height="36" rx="18" fill="#112d45" stroke="#2b6481"/>
+        <text x="217" y="24" fill="#bae6fd" font-size="14" font-weight="680" text-anchor="middle">No hand-built per-task feature table</text>
+      </g>
+    </g>
+
+    <path d="M1010 426 C1041 426 1046 426 1076 426" fill="none" stroke="#7dd3fc" stroke-width="4" marker-end="url(#arrow)"/>
+    <text x="1043" y="405" fill="#7dd3fc" font-size="13" font-weight="700" text-anchor="middle">ONE ROW</text>
+
+    <g transform="translate(1090 184)" filter="url(#shadow)">
+      <rect width="430" height="485" rx="28" fill="url(#catPanel)" stroke="#2f7f70" stroke-width="2"/>
+      <rect x="25" y="24" width="132" height="30" rx="15" fill="#17483f"/>
+      <text x="91" y="45" fill="#a7f3d0" font-size="14" font-weight="700" text-anchor="middle" letter-spacing="1">OFF-THE-SHELF</text>
+      <text x="25" y="92" fill="#f8fafc" font-size="28" font-weight="740">Standard CatBoost</text>
+      <text x="25" y="121" fill="#9fb2c8" font-size="16">The model stays conventional.</text>
+
+      <g transform="translate(25 153)">
+        <rect width="380" height="116" rx="16" fill="#102a2d" stroke="#28665d"/>
+        <rect x="20" y="20" width="340" height="76" rx="10" fill="#0c2027"/>
+        <line x1="20" y1="45" x2="360" y2="45" stroke="#2d5a60"/>
+        <line x1="107" y1="20" x2="107" y2="96" stroke="#2d5a60"/>
+        <line x1="190" y1="20" x2="190" y2="96" stroke="#2d5a60"/>
+        <line x1="276" y1="20" x2="276" y2="96" stroke="#2d5a60"/>
+        <text x="63" y="37" fill="#a7f3d0" font-size="11" text-anchor="middle">entity</text>
+        <text x="148" y="37" fill="#a7f3d0" font-size="11" text-anchor="middle">history</text>
+        <text x="233" y="37" fill="#a7f3d0" font-size="11" text-anchor="middle">context</text>
+        <text x="318" y="37" fill="#a7f3d0" font-size="11" text-anchor="middle">target</text>
+        <line x1="35" y1="61" x2="89" y2="61" stroke="#597b82"/>
+        <line x1="121" y1="61" x2="175" y2="61" stroke="#597b82"/>
+        <line x1="204" y1="61" x2="260" y2="61" stroke="#597b82"/>
+        <line x1="291" y1="61" x2="345" y2="61" stroke="#6ee7b7"/>
+        <line x1="35" y1="79" x2="89" y2="79" stroke="#597b82"/>
+        <line x1="121" y1="79" x2="175" y2="79" stroke="#597b82"/>
+        <line x1="204" y1="79" x2="260" y2="79" stroke="#597b82"/>
+        <line x1="291" y1="79" x2="345" y2="79" stroke="#6ee7b7"/>
+      </g>
+
+      <path d="M215 287 v30" stroke="#6ee7b7" stroke-width="3" marker-end="url(#arrowGreen)"/>
+
+      <g transform="translate(25 326)">
+        <rect width="380" height="92" rx="16" fill="#102a2d" stroke="#28665d"/>
+        <text x="20" y="29" fill="#d1fae5" font-size="16" font-weight="700">Official RelBench evaluation</text>
+        <rect x="20" y="47" width="103" height="26" rx="13" fill="#17483f"/>
+        <text x="71.5" y="65" fill="#a7f3d0" font-size="13" font-weight="700" text-anchor="middle">AUROC</text>
+        <rect x="136" y="47" width="103" height="26" rx="13" fill="#17483f"/>
+        <text x="187.5" y="65" fill="#a7f3d0" font-size="13" font-weight="700" text-anchor="middle">NMAE</text>
+        <rect x="252" y="47" width="108" height="26" rx="13" fill="#17483f"/>
+        <text x="306" y="65" fill="#a7f3d0" font-size="13" font-weight="700" text-anchor="middle">SUBMIT</text>
+      </g>
+    </g>
+
+    <g transform="translate(80 756)">
+      <rect width="1440" height="84" rx="22" fill="#0e1a2b" stroke="#293b52"/>
+      <text x="35" y="34" fill="#7dd3fc" font-size="15" font-weight="760">RelBench</text>
+      <text x="35" y="58" fill="#a9bdd2" font-size="14">defines the task, labels, and splits</text>
+      <line x1="405" y1="20" x2="405" y2="64" stroke="#31435a"/>
+      <text x="446" y="34" fill="#7dd3fc" font-size="15" font-weight="760">GRAPHREDUCE</text>
+      <text x="446" y="58" fill="#a9bdd2" font-size="14">compresses relational history at each cutoff</text>
+      <line x1="1012" y1="20" x2="1012" y2="64" stroke="#31435a"/>
+      <text x="1053" y="34" fill="#6ee7b7" font-size="15" font-weight="760">CATBOOST</text>
+      <text x="1053" y="58" fill="#a9bdd2" font-size="14">predicts from the compressed representation</text>
+    </g>
+  </g>
+</svg>

@@ -16,6 +16,8 @@ is the part being evaluated.
 The harness currently covers all 12 binary-classification and all 9 regression
 tasks in the seven original RelBench databases.
 
+![Kurve-RSC relational signal compression architecture](assets/kurve-rsc-architecture.svg)
+
 The relational computation is powered by
 [GraphReduce](https://github.com/wesmadrigal/graphreduce), a general-purpose
 system for expressing tables as graph nodes, relationships as edges, and
