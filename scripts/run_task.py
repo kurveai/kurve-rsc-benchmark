@@ -16,6 +16,7 @@ SINGLE_TRAIN_PERIOD_ENV = "RELBENCH_SINGLE_TRAIN_PERIOD"
 MODEL_BACKEND_ENV = "KURVE_RSC_MODEL_BACKEND"
 TRAIN_ALL_AT_ONCE_ENV = "KURVE_RSC_TRAIN_ALL_AT_ONCE"
 FEATURE_MANIFEST_ENV = "KURVE_RSC_FEATURE_MANIFEST"
+BASELINE_FEATURE_FAMILY_ENV = "KURVE_RSC_BASELINE_FEATURE_FAMILY"
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -62,12 +63,12 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--feature-manifest",
+        "--baseline",
         action=argparse.BooleanOptionalAction,
-        default=_env_flag(FEATURE_MANIFEST_ENV),
+        default=_env_flag(BASELINE_FEATURE_FAMILY_ENV),
         help=(
-            "Fit and apply GraphReduce feature manifests for rel-trial "
-            "study-outcome and site-success. Other tasks are unchanged."
+            "Use only the baseline 'base' feature family on every graph node. "
+            "The default preserves the task's configured feature families."
         ),
     )
     return parser
@@ -89,7 +90,8 @@ def main() -> int:
     os.environ[SINGLE_TRAIN_PERIOD_ENV] = "1" if args.single_train_period else "0"
     os.environ[MODEL_BACKEND_ENV] = "tabpfn" if args.tabpfn else "catboost"
     os.environ[TRAIN_ALL_AT_ONCE_ENV] = "1" if args.train_all_at_once else "0"
-    os.environ[FEATURE_MANIFEST_ENV] = "1" if args.feature_manifest else "0"
+    os.environ[BASELINE_FEATURE_FAMILY_ENV] = "1" if args.baseline else "0"
+    os.environ[FEATURE_MANIFEST_ENV] = "0"
     sys.path.insert(0, str(TASK_DIR))
     sys.argv = [str(task_path)]
     runpy.run_path(str(task_path), run_name="__main__")

@@ -98,13 +98,12 @@ from combinations of these GraphReduce feature families:
 - `context`: comparisons within a defensible peer group
 
 This is automated relational compression, not a collection of bespoke feature
-formulas tuned to individual targets. The adapter's job is to preserve the
-available relational signal and define where it should be reduced. For
-example, the trial site-success schema includes structured study design,
-regulatory, sponsor, condition, intervention, eligibility, and facility
-geography data. Its many-to-many relations are first collapsed to a bounded
-facility/study history, which GraphReduce reduces to the facility grain before
-standard CatBoost is fitted.
+formulas tuned to individual targets. The Trial adapter is fully schema-driven:
+it derives every node, column, timestamp, and edge from RelBench metadata and
+uses the same feature-selection and modeling policy for all three Trial tasks.
+To keep cyclic schemas bounded, it constructs a deterministic spanning tree
+rooted at the task's official entity table and applies a uniform one-hop
+GraphReduce feature depth.
 
 GraphReduce `1.10.2` is installed from
 [PyPI](https://pypi.org/project/graphreduce/). A neighboring GraphReduce source
@@ -160,6 +159,28 @@ output or `--stop-on-error` to stop a family run after its first failure.
 Reports, task logs, and machine-readable summaries are written below
 `results/`. During multi-cutoff construction, feature frames are materialized
 as Parquet files and released after training when the task permits it.
+
+### Feature-family modes
+
+The default preserves every task's current configured feature-family policy.
+For a base-family-only comparison, pass `--baseline` to a family run:
+
+```bash
+python scripts/run_all.py --task-type classification --baseline
+```
+
+The same option is accepted by the single-task launcher and by every task
+script directly:
+
+```bash
+python scripts/run_task.py relbench_event_user_ignore.py --baseline
+python kurve_rsc/relbench_event_user_ignore.py --baseline
+```
+
+Baseline mode is a final top-level override: every graph node uses exactly the
+`base` family, including nodes that normally enable semantic, conditional,
+temporal, sequence, episode, or context families. Omitting the option retains
+the existing behavior. Reports record whether baseline mode was enabled.
 
 ### Training cutoffs and concurrency
 
@@ -219,23 +240,6 @@ The runner selects `TabPFNClassifier` or `TabPFNRegressor` from the task type.
 combines the selected frames into one in-memory matrix. First use may download
 a checkpoint and require accepting the model license; see the
 [official TabPFN documentation](https://github.com/PriorLabs/TabPFN#basic-usage).
-
-### Typed feature manifests
-
-The top-level `--feature-manifest` option is currently enabled for
-`rel-trial/study-outcome` and `rel-trial/site-success`:
-
-```bash
-python scripts/run_all.py \
-  --task-type classification \
-  --feature-manifest
-```
-
-For each participating dataset, the adapter profiles source rows before the
-validation cutoff, freezes the resulting GraphReduce column decisions, keeps
-the keys and timestamps required for joins and filtering, and reuses the same
-manifest for training, validation, and test frames. Omit the flag or pass
-`--no-feature-manifest` to use the task's explicit column configuration.
 
 `rel-event/user-ignore` applies the same stability principle to computation:
 it captures the first training cutoff's GraphReduce operation plan, replays it

@@ -1,1232 +1,543 @@
 #!/usr/bin/env python
-"""Shared RelBench rel-trial feature builders for task-table examples."""
+"""Schema-driven GraphReduce runner for every RelBench rel-trial entity task.
+
+The adapter deliberately contains no task-specific feature definitions.  Nodes,
+columns, timestamps, and edges are derived from the RelBench database metadata;
+the official task object supplies the entity table, labels, splits, task type,
+and evaluator.
+"""
 
 from __future__ import annotations
 
-import datetime
-import importlib.metadata
-import sys
+import re
+from collections import deque
 from pathlib import Path
-from typing import Callable
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+from typing import Iterator, Sequence
 
 import duckdb
 import numpy as np
 import pandas as pd
-from sklearn.metrics import mean_absolute_error
 
 from graphreduce.enum import ComputeLayerEnum, PeriodUnit, SQLOpType
 from graphreduce.graph_reduce import GraphReduce
 from graphreduce.models import sqlop
 from graphreduce.node import DuckdbNode
-from relbench_dataset_utils import (
-    RelBenchFrameStore,
-    get_relbench_dataset_db,
-    get_relbench_split_task_table,
-    iter_training_frames,
-    register_relbench_db_views,
-    target_table_from_frame,
-)
-from relbench_regression_metrics import add_nmae
-from relbench_catboost_utils import (
-    TEMPORAL_FEATURE_FAMILIES,
-    fit_tabpfn_regressor,
-    fit_tuned_cross_entropy_model_incremental,
-    fit_tuned_regressor_incremental,
-    selected_model_backend,
-    set_feature_families,
-)
-from relbench_feature_manifest import (
-    TRIAL_FEATURE_MANIFEST_SOURCES,
-    TRIAL_VALIDATION_CUT_DATE,
-    apply_feature_manifests,
-    load_feature_manifest_samples,
-)
 
-LOOKBACK_START = datetime.datetime(2000, 1, 1)
-SITE_SUCCESS_FEATURE_FAMILIES = ("base", "semantic", "context")
-
-# Point-in-time-valid source columns used by the site-success graph.  Keep
-# free-form study text out of this compact example, but retain the structured
-# trial design, regulatory, sponsor, indication, intervention, and geography
-# signals that RelBench makes available at prediction time.
-SITE_STUDY_FEATURE_COLUMNS = (
-    "enrollment",
-    "number_of_arms",
-    "number_of_groups",
-    "study_type",
-    "phase",
-    "enrollment_type",
-    "source_class",
-    "has_dmc",
-    "is_fda_regulated_drug",
-    "is_fda_regulated_device",
-    "is_unapproved_device",
-    "is_ppsd",
-    "is_us_export",
-    "fdaaa801_violation",
-    "plan_to_share_ipd",
-)
-SITE_FACILITY_FEATURE_COLUMNS = ("city", "state", "zip", "country")
-SITE_DESIGN_FEATURE_COLUMNS = (
-    "allocation",
-    "intervention_model",
-    "observational_model",
-    "primary_purpose",
-    "time_perspective",
-    "masking",
-    "subject_masked",
-    "caregiver_masked",
-    "investigator_masked",
-    "outcomes_assessor_masked",
-)
-SITE_ELIGIBILITY_FEATURE_COLUMNS = (
-    "sampling_method",
-    "gender",
-    "minimum_age",
-    "maximum_age",
-    "healthy_volunteers",
-    "gender_based",
-    "adult",
-    "child",
-    "older_adult",
-)
-
-TABLE_NAME_TO_FILENAME = {
-    "studies": "studies.parquet",
-    "outcomes": "outcomes.parquet",
-    "outcome_analyses": "outcome_analyses.parquet",
-    "drop_withdrawals": "drop_withdrawals.parquet",
-    "reported_event_totals": "reported_event_totals.parquet",
-    "designs": "designs.parquet",
-    "eligibilities": "eligibilities.parquet",
-    "interventions": "interventions.parquet",
-    "conditions": "conditions.parquet",
-    "facilities": "facilities.parquet",
-    "sponsors": "sponsors.parquet",
-    "interventions_studies": "interventions_studies.parquet",
-    "conditions_studies": "conditions_studies.parquet",
-    "facilities_studies": "facilities_studies.parquet",
-    "sponsors_studies": "sponsors_studies.parquet",
-}
-
-
-def prepare_trial_views(con: duckdb.DuckDBPyConnection, data_dir: Path | None = None) -> dict[str, list[str]]:
-    _, db = get_relbench_dataset_db("rel-trial", download=True, upto_test_timestamp=False)
-    register_relbench_db_views(
-        con,
-        db,
-        {table_name: f"{table_name}_src" for table_name in TABLE_NAME_TO_FILENAME},
+try:
+    from .relbench_catboost_utils import (
+        fit_tuned_classifier_incremental,
+        fit_tuned_regressor_incremental,
+        selected_model_backend,
     )
-    table_columns: dict[str, list[str]] = {}
-    for table_name in TABLE_NAME_TO_FILENAME:
-        table_columns[table_name] = con.sql(f"SELECT * FROM {table_name}_src LIMIT 0").to_df().columns.tolist()
-    return table_columns
+    from .relbench_dataset_utils import (
+        RelBenchFrameStore,
+        get_relbench_dataset_db,
+        get_relbench_split_task_table,
+        iter_training_frames,
+        register_relbench_db_views,
+        target_table_from_frame,
+    )
+    from .relbench_regression_metrics import add_nmae
+    from .relbench_feature_policy import apply_feature_family_policy
+except ImportError:  # Direct execution with ``kurve_rsc`` on sys.path.
+    from relbench_catboost_utils import (
+        fit_tuned_classifier_incremental,
+        fit_tuned_regressor_incremental,
+        selected_model_backend,
+    )
+    from relbench_dataset_utils import (
+        RelBenchFrameStore,
+        get_relbench_dataset_db,
+        get_relbench_split_task_table,
+        iter_training_frames,
+        register_relbench_db_views,
+        target_table_from_frame,
+    )
+    from relbench_regression_metrics import add_nmae
+    from relbench_feature_policy import apply_feature_family_policy
 
 
-def _by_lower(columns: list[str]) -> dict[str, str]:
-    return {column.lower(): column for column in columns}
+DATASET_NAME = "rel-trial"
+_IDENTIFIER_PATTERN = re.compile(r"[^0-9A-Za-z_]+")
 
 
-def _select_columns(columns: list[str], required: list[str], optional: list[str] | None = None) -> list[str]:
-    by_lower = _by_lower(columns)
-    selected = [by_lower[column.lower()] for column in required]
-    for column in optional or []:
-        resolved = by_lower.get(column.lower())
-        if resolved is not None:
-            selected.append(resolved)
-    return list(dict.fromkeys(selected))
+def _sql_name(value: str) -> str:
+    """Return a stable SQL/GraphReduce identifier derived only from metadata."""
+
+    normalized = _IDENTIFIER_PATTERN.sub("_", value).strip("_").lower()
+    if not normalized:
+        raise ValueError(f"Cannot derive an identifier from {value!r}")
+    if normalized[0].isdigit():
+        normalized = f"t_{normalized}"
+    return normalized
 
 
-def _feature_cut_date(task_timestamp: pd.Timestamp) -> datetime.datetime:
-    return task_timestamp.to_pydatetime() + datetime.timedelta(days=1)
+def _view_name(table_name: str) -> str:
+    return f"{_sql_name(table_name)}_src"
 
 
-def _select_evenly_spaced_timestamps(
-    timestamps: list[pd.Timestamp], max_count: int | None
-) -> list[pd.Timestamp]:
-    """Keep a bounded, evenly spaced sample while retaining both boundaries."""
+def _feature_cutoff(timestamp: pd.Timestamp) -> pd.Timestamp:
+    """Make GraphReduce's strict upper bound inclusive at the task timestamp."""
 
-    if max_count is None or len(timestamps) <= max_count:
-        return list(timestamps)
-    if max_count < 2:
-        raise ValueError("max_count must be at least 2 when sampling timestamps")
-
-    indices = np.linspace(0, len(timestamps) - 1, num=max_count)
-    return [timestamps[int(round(index))] for index in indices]
+    return pd.Timestamp(timestamp) + pd.Timedelta(microseconds=1)
 
 
-def _graph(
+def _database_lookback_days(db: object, cutoff: pd.Timestamp) -> int:
+    starts = [
+        pd.Timestamp(table.df[table.time_col].min())
+        for table in db.table_dict.values()
+        if table.time_col is not None and not table.df.empty
+    ]
+    if not starts:
+        return 1
+    return max(1, int((pd.Timestamp(cutoff) - min(starts)).days) + 1)
+
+
+def _schema_tree_edges(
+    db: object,
+    root_table: str,
+) -> list[tuple[str, str, str, str]]:
+    """Return a deterministic, cycle-free traversal of the RelBench FK graph.
+
+    Each tuple is ``(current_table, next_table, child_fk, parent_table)``.
+    Keeping only the first edge that discovers a table prevents schema cycles
+    from expanding the same relation more than once.
+    """
+
+    if root_table not in db.table_dict:
+        raise ValueError(
+            f"Task entity table {root_table!r} is absent from the database"
+        )
+
+    adjacency: dict[str, list[tuple[str, str, str]]] = {
+        name: [] for name in db.table_dict
+    }
+    for child_name, child in db.table_dict.items():
+        for foreign_key, parent_name in child.fkey_col_to_pkey_table.items():
+            if parent_name not in db.table_dict:
+                raise ValueError(
+                    f"Foreign key {child_name}.{foreign_key} references missing "
+                    f"table {parent_name!r}"
+                )
+            adjacency[child_name].append((parent_name, foreign_key, parent_name))
+            adjacency[parent_name].append((child_name, foreign_key, parent_name))
+
+    visited = {root_table}
+    queue = deque([root_table])
+    edges: list[tuple[str, str, str, str]] = []
+    while queue:
+        current = queue.popleft()
+        for neighbor, foreign_key, parent_name in sorted(adjacency[current]):
+            if neighbor in visited:
+                continue
+            visited.add(neighbor)
+            queue.append(neighbor)
+            edges.append((current, neighbor, foreign_key, parent_name))
+    return edges
+
+
+def build_generic_trial_features(
     con: duckdb.DuckDBPyConnection,
-    name: str,
-    parent_node: DuckdbNode,
-    nodes: list[DuckdbNode],
-    cut_date: datetime.datetime,
-) -> GraphReduce:
-    gr = GraphReduce(
-        name=name,
-        parent_node=parent_node,
+    db: object,
+    entity_table: str,
+    task_timestamp: pd.Timestamp,
+    entity_keys: pd.Series | None = None,
+) -> tuple[pd.DataFrame, str]:
+    """Build one feature frame entirely from the RelBench schema metadata."""
+
+    if entity_table not in db.table_dict:
+        raise ValueError(f"Unknown entity table: {entity_table}")
+
+    feature_cutoff = _feature_cutoff(task_timestamp)
+    root_source = _view_name(entity_table)
+    registered_keys_ref: str | None = None
+    if entity_keys is not None:
+        root_pk = db.table_dict[entity_table].pkey_col
+        timestamp_suffix = pd.Timestamp(task_timestamp).strftime("%Y%m%d%H%M%S%f")
+        registered_keys_ref = f"_generic_task_entity_keys_{timestamp_suffix}"
+        filtered_root_source = f"_generic_task_entities_src_{timestamp_suffix}"
+        con.register(
+            registered_keys_ref,
+            pd.DataFrame({root_pk: entity_keys.drop_duplicates()}),
+        )
+        con.sql(
+            f"""
+            CREATE OR REPLACE TEMP VIEW {filtered_root_source} AS
+            SELECT source.*
+            FROM {root_source} AS source
+            INNER JOIN {registered_keys_ref} AS task_entities
+                USING ({root_pk})
+            """
+        )
+        root_source = filtered_root_source
+    nodes: dict[str, DuckdbNode] = {}
+    for table_name in sorted(db.table_dict):
+        table = db.table_dict[table_name]
+        if table.pkey_col is None:
+            raise ValueError(
+                f"Generic GraphReduce requires a primary key for table {table_name!r}"
+            )
+        filters = None
+        if table_name == entity_table and table.time_col is not None:
+            prefix = _sql_name(table_name)
+            filters = [
+                sqlop(
+                    optype=SQLOpType.where,
+                    opval=(
+                        f"{prefix}_{table.time_col} < "
+                        f"TIMESTAMP '{feature_cutoff.isoformat(sep=' ')}'"
+                    ),
+                )
+            ]
+        nodes[table_name] = DuckdbNode(
+            fpath=(
+                root_source
+                if table_name == entity_table
+                else _view_name(table_name)
+            ),
+            prefix=_sql_name(table_name),
+            pk=table.pkey_col,
+            date_key=table.time_col,
+            columns=table.df.columns.tolist(),
+            do_filters_ops=filters,
+        )
+
+    root = nodes[entity_table]
+    graph = GraphReduce(
+        name=(
+            f"generic_{_sql_name(DATASET_NAME)}_{_sql_name(entity_table)}_"
+            f"{pd.Timestamp(task_timestamp).date()}"
+        ),
+        parent_node=root,
         compute_layer=ComputeLayerEnum.duckdb,
         sql_client=con,
-        cut_date=cut_date,
-        compute_period_val=max(1, (cut_date - LOOKBACK_START).days + 1),
+        cut_date=feature_cutoff.to_pydatetime(),
+        compute_period_val=_database_lookback_days(db, feature_cutoff),
         compute_period_unit=PeriodUnit.day,
         auto_features=True,
         auto_labels=False,
         date_filters_on_agg=True,
-        auto_feature_hops_back=2,
+        auto_feature_hops_back=1,
         auto_feature_hops_front=0,
         use_temp_tables=True,
     )
-    for node in nodes:
-        gr.add_node(node)
-    return gr
+    apply_feature_family_policy(nodes.values())
+    for node in nodes.values():
+        graph.add_node(node)
 
-
-def build_study_features(
-    con: duckdb.DuckDBPyConnection,
-    table_columns: dict[str, list[str]],
-    task_timestamp: pd.Timestamp,
-    *,
-    feature_manifest_samples: dict[str, pd.DataFrame] | None = None,
-    feature_manifest_summary: dict[str, dict[str, int]] | None = None,
-) -> pd.DataFrame:
-    cut_date = _feature_cut_date(task_timestamp)
-
-    studies_cols = _select_columns(
-        table_columns["studies"],
-        ["nct_id", "start_date"],
-        ["enrollment", "number_of_arms", "number_of_groups"],
-    )
-    outcomes_cols = _select_columns(table_columns["outcomes"], ["id", "nct_id", "date"])
-    outcome_analyses_cols = _select_columns(
-        table_columns["outcome_analyses"],
-        ["id", "nct_id", "outcome_id", "date"],
-        [
-            "p_value_modifier",
-            "param_value",
-            "dispersion_value",
-            "p_value",
-            "ci_percent",
-            "ci_lower_limit",
-            "ci_upper_limit",
-            "ci_upper_limit_raw",
-            "ci_lower_limit_raw",
-            "p_value_raw",
-        ],
-    )
-    drop_withdrawals_cols = _select_columns(
-        table_columns["drop_withdrawals"],
-        ["id", "nct_id", "date"],
-        ["count"],
-    )
-    reported_event_totals_cols = _select_columns(
-        table_columns["reported_event_totals"],
-        ["id", "nct_id", "date"],
-        [
-            "event_type",
-            "classification",
-            "subjects_affected",
-            "subjects_at_risk",
-        ],
-    )
-    designs_cols = _select_columns(table_columns["designs"], ["id", "nct_id", "date"])
-    eligibilities_cols = _select_columns(table_columns["eligibilities"], ["id", "nct_id", "date"])
-    interventions_cols = _select_columns(table_columns["interventions"], ["intervention_id"])
-    conditions_cols = _select_columns(table_columns["conditions"], ["condition_id"])
-    facilities_cols = _select_columns(table_columns["facilities"], ["facility_id"])
-    sponsors_cols = _select_columns(table_columns["sponsors"], ["sponsor_id"])
-    interventions_studies_cols = _select_columns(
-        table_columns["interventions_studies"],
-        ["id", "nct_id", "intervention_id", "date"],
-    )
-    conditions_studies_cols = _select_columns(
-        table_columns["conditions_studies"],
-        ["id", "nct_id", "condition_id", "date"],
-    )
-    facilities_studies_cols = _select_columns(
-        table_columns["facilities_studies"],
-        ["id", "nct_id", "facility_id", "date"],
-    )
-    sponsors_studies_cols = _select_columns(
-        table_columns["sponsors_studies"],
-        ["id", "nct_id", "sponsor_id", "date"],
-    )
-
-    studies_l = _by_lower(studies_cols)
-    outcomes_l = _by_lower(outcomes_cols)
-    outcome_analyses_l = _by_lower(outcome_analyses_cols)
-    drop_withdrawals_l = _by_lower(drop_withdrawals_cols)
-    reported_event_totals_l = _by_lower(reported_event_totals_cols)
-    designs_l = _by_lower(designs_cols)
-    eligibilities_l = _by_lower(eligibilities_cols)
-    interventions_l = _by_lower(interventions_cols)
-    conditions_l = _by_lower(conditions_cols)
-    facilities_l = _by_lower(facilities_cols)
-    sponsors_l = _by_lower(sponsors_cols)
-    interventions_studies_l = _by_lower(interventions_studies_cols)
-    conditions_studies_l = _by_lower(conditions_studies_cols)
-    facilities_studies_l = _by_lower(facilities_studies_cols)
-    sponsors_studies_l = _by_lower(sponsors_studies_cols)
-
-    outcome_analysis_annotations = {}
-    if "p_value" in outcome_analyses_l:
-        outcome_analysis_annotations["is_significant"] = (
-            f"{{{outcome_analyses_l['p_value']}}} >= 0 "
-            f"AND {{{outcome_analyses_l['p_value']}}} <= 0.05"
-        )
-    reported_event_annotations = {}
-    if "event_type" in reported_event_totals_l:
-        reported_event_annotations["is_serious_or_death"] = (
-            f"{{{reported_event_totals_l['event_type']}}} IN ('serious', 'deaths')"
-        )
-
-    studies = DuckdbNode(
-        fpath="studies_src",
-        prefix="std",
-        pk=studies_l["nct_id"],
-        date_key=studies_l["start_date"],
-        columns=studies_cols,
-        do_filters_ops=[
-            sqlop(optype=SQLOpType.where, opval=f"std_{studies_l['nct_id']} is not null"),
-            sqlop(
-                optype=SQLOpType.where,
-                opval=f"std_{studies_l['start_date']} <= '{task_timestamp.date()}'",
-            ),
-        ],
-    )
-    outcomes = DuckdbNode(
-        fpath="outcomes_src",
-        prefix="out",
-        pk=outcomes_l["id"],
-        date_key="date",
-        columns=outcomes_cols,
-    )
-    outcome_analyses = DuckdbNode(
-        fpath="outcome_analyses_src",
-        prefix="oa",
-        pk=outcome_analyses_l["id"],
-        date_key=outcome_analyses_l["date"],
-        columns=outcome_analyses_cols,
-        feature_family_max_columns=4,
-        categorical_top_k=5,
-        context_keys=(outcome_analyses_l["nct_id"], outcome_analyses_l["outcome_id"]),
-        annotation_expressions=outcome_analysis_annotations,
-    )
-    drop_withdrawals = DuckdbNode(
-        fpath="drop_withdrawals_src",
-        prefix="drw",
-        pk=drop_withdrawals_l["id"],
-        date_key=drop_withdrawals_l["date"],
-        columns=drop_withdrawals_cols,
-    )
-    reported_event_totals = DuckdbNode(
-        fpath="reported_event_totals_src",
-        prefix="evt",
-        pk=reported_event_totals_l["id"],
-        date_key=reported_event_totals_l["date"],
-        columns=reported_event_totals_cols,
-        feature_family_max_columns=4,
-        categorical_top_k=5,
-        context_keys=(reported_event_totals_l["nct_id"],),
-        annotation_expressions=reported_event_annotations,
-    )
-    designs = DuckdbNode(
-        fpath="designs_src",
-        prefix="dsg",
-        pk=designs_l["id"],
-        date_key=designs_l["date"],
-        columns=designs_cols,
-    )
-    eligibilities = DuckdbNode(
-        fpath="eligibilities_src",
-        prefix="eli",
-        pk=eligibilities_l["id"],
-        date_key=eligibilities_l["date"],
-        columns=eligibilities_cols,
-    )
-    interventions_studies = DuckdbNode(
-        fpath="interventions_studies_src",
-        prefix="ist",
-        pk=interventions_studies_l["id"],
-        date_key=interventions_studies_l["date"],
-        columns=interventions_studies_cols,
-    )
-    conditions_studies = DuckdbNode(
-        fpath="conditions_studies_src",
-        prefix="cst",
-        pk=conditions_studies_l["id"],
-        date_key=conditions_studies_l["date"],
-        columns=conditions_studies_cols,
-    )
-    facilities_studies = DuckdbNode(
-        fpath="facilities_studies_src",
-        prefix="fst",
-        pk=facilities_studies_l["id"],
-        date_key=facilities_studies_l["date"],
-        columns=facilities_studies_cols,
-    )
-    sponsors_studies = DuckdbNode(
-        fpath="sponsors_studies_src",
-        prefix="sst",
-        pk=sponsors_studies_l["id"],
-        date_key=sponsors_studies_l["date"],
-        columns=sponsors_studies_cols,
-    )
-    interventions = DuckdbNode(
-        fpath="interventions_src",
-        prefix="intv",
-        pk=interventions_l["intervention_id"],
-        date_key=None,
-        columns=interventions_cols,
-    )
-    conditions = DuckdbNode(
-        fpath="conditions_src",
-        prefix="cond",
-        pk=conditions_l["condition_id"],
-        date_key=None,
-        columns=conditions_cols,
-    )
-    facilities = DuckdbNode(
-        fpath="facilities_src",
-        prefix="fac",
-        pk=facilities_l["facility_id"],
-        date_key=None,
-        columns=facilities_cols,
-    )
-    sponsors = DuckdbNode(
-        fpath="sponsors_src",
-        prefix="spn",
-        pk=sponsors_l["sponsor_id"],
-        date_key=None,
-        columns=sponsors_cols,
-    )
-
-    nodes = [
-        studies,
-        outcomes,
-        outcome_analyses,
-        drop_withdrawals,
-        reported_event_totals,
-        designs,
-        eligibilities,
-        interventions_studies,
-        conditions_studies,
-        facilities_studies,
-        sponsors_studies,
-        interventions,
-        conditions,
-        facilities,
-        sponsors,
-    ]
-    set_feature_families(
-        [outcome_analyses, reported_event_totals], TEMPORAL_FEATURE_FAMILIES
-    )
-    if feature_manifest_samples is not None:
-        current_summary = apply_feature_manifests(
-            {
-                "studies": studies,
-                "outcomes": outcomes,
-                "outcome_analyses": outcome_analyses,
-                "drop_withdrawals": drop_withdrawals,
-                "reported_event_totals": reported_event_totals,
-                "designs": designs,
-                "eligibilities": eligibilities,
-                "interventions_studies": interventions_studies,
-                "conditions_studies": conditions_studies,
-                "facilities_studies": facilities_studies,
-                "sponsors_studies": sponsors_studies,
-                "interventions": interventions,
-                "conditions": conditions,
-                "facilities": facilities,
-                "sponsors": sponsors,
-            },
-            TRIAL_FEATURE_MANIFEST_SOURCES,
-            feature_manifest_samples,
-        )
-        if feature_manifest_summary is not None and not feature_manifest_summary:
-            feature_manifest_summary.update(current_summary)
-    gr = _graph(
-        con,
-        f"rel_trial_study_features_{task_timestamp.date()}",
-        studies,
-        nodes,
-        cut_date,
-    )
-
-    study_id = studies_l["nct_id"]
-    gr.add_entity_edge(studies, outcomes, study_id, outcomes_l["nct_id"], reduce=True)
-    gr.add_entity_edge(studies, outcome_analyses, study_id, outcome_analyses_l["nct_id"], reduce=True)
-    gr.add_entity_edge(studies, drop_withdrawals, study_id, drop_withdrawals_l["nct_id"], reduce=True)
-    gr.add_entity_edge(studies, reported_event_totals, study_id, reported_event_totals_l["nct_id"], reduce=True)
-    gr.add_entity_edge(studies, designs, study_id, designs_l["nct_id"], reduce=True)
-    gr.add_entity_edge(studies, eligibilities, study_id, eligibilities_l["nct_id"], reduce=True)
-    gr.add_entity_edge(studies, interventions_studies, study_id, interventions_studies_l["nct_id"], reduce=True)
-    gr.add_entity_edge(studies, conditions_studies, study_id, conditions_studies_l["nct_id"], reduce=True)
-    gr.add_entity_edge(studies, facilities_studies, study_id, facilities_studies_l["nct_id"], reduce=True)
-    gr.add_entity_edge(studies, sponsors_studies, study_id, sponsors_studies_l["nct_id"], reduce=True)
-    gr.add_entity_edge(
-        interventions_studies,
-        interventions,
-        interventions_studies_l["intervention_id"],
-        interventions_l["intervention_id"],
-        reduce=True,
-    )
-    gr.add_entity_edge(
-        conditions_studies,
-        conditions,
-        conditions_studies_l["condition_id"],
-        conditions_l["condition_id"],
-        reduce=True,
-    )
-    gr.add_entity_edge(
-        facilities_studies,
-        facilities,
-        facilities_studies_l["facility_id"],
-        facilities_l["facility_id"],
-        reduce=True,
-    )
-    gr.add_entity_edge(
-        sponsors_studies,
-        sponsors,
-        sponsors_studies_l["sponsor_id"],
-        sponsors_l["sponsor_id"],
-        reduce=True,
-    )
-
-    gr.do_transformations_sql()
-    frame = con.sql(f"SELECT * FROM {gr.parent_node._cur_data_ref}").to_df().copy()
-    gr._clean_refs()
-    frame["timestamp"] = task_timestamp
-    return frame
-
-
-def build_site_features(
-    con: duckdb.DuckDBPyConnection,
-    table_columns: dict[str, list[str]],
-    task_timestamp: pd.Timestamp,
-    *,
-    feature_manifest_samples: dict[str, pd.DataFrame] | None = None,
-    feature_manifest_summary: dict[str, dict[str, int]] | None = None,
-) -> pd.DataFrame:
-    """Build compact, point-in-time site features from one study-history edge."""
-
-    cut_date = _feature_cut_date(task_timestamp)
-    cutoff_sql = cut_date.strftime("%Y-%m-%d %H:%M:%S")
-    task_date_sql = task_timestamp.strftime("%Y-%m-%d %H:%M:%S")
-
-    facilities_cols = _select_columns(
-        table_columns["facilities"],
-        ["facility_id"],
-        list(SITE_FACILITY_FEATURE_COLUMNS),
-    )
-    facilities_l = _by_lower(facilities_cols)
-
-    # Collapse each many-to-many source at the study level before joining it to
-    # facilities.  The resulting relation has one row per facility/study, so
-    # GraphReduce performs one bounded reduction rather than repeatedly
-    # aggregating a wide, fan-out-prone multi-hop graph.
-    con.execute(
-        f"""
-        CREATE OR REPLACE TEMP VIEW site_study_history_src AS
-        WITH design_latest AS (
-            SELECT * EXCLUDE (_row_number)
-            FROM (
-                SELECT
-                    id,
-                    nct_id,
-                    date,
-                    allocation,
-                    intervention_model,
-                    observational_model,
-                    primary_purpose,
-                    time_perspective,
-                    masking,
-                    subject_masked,
-                    caregiver_masked,
-                    investigator_masked,
-                    outcomes_assessor_masked,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY nct_id ORDER BY date DESC, id DESC
-                    ) AS _row_number
-                FROM designs_src
-                WHERE date < TIMESTAMP '{cutoff_sql}'
+    for current_name, neighbor_name, foreign_key, parent_name in _schema_tree_edges(
+        db, entity_table
+    ):
+        current = nodes[current_name]
+        neighbor = nodes[neighbor_name]
+        if current_name == parent_name:
+            graph.add_entity_edge(
+                current,
+                neighbor,
+                parent_key=db.table_dict[current_name].pkey_col,
+                relation_key=foreign_key,
+                reduce=True,
             )
-            WHERE _row_number = 1
-        ),
-        eligibility_latest AS (
-            SELECT * EXCLUDE (_row_number)
-            FROM (
-                SELECT
-                    id,
-                    nct_id,
-                    date,
-                    sampling_method,
-                    gender,
-                    minimum_age,
-                    maximum_age,
-                    healthy_volunteers,
-                    gender_based,
-                    adult,
-                    child,
-                    older_adult,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY nct_id ORDER BY date DESC, id DESC
-                    ) AS _row_number
-                FROM eligibilities_src
-                WHERE date < TIMESTAMP '{cutoff_sql}'
+        else:
+            graph.add_entity_edge(
+                current,
+                neighbor,
+                parent_key=foreign_key,
+                relation_key=db.table_dict[neighbor_name].pkey_col,
+                reduce=True,
             )
-            WHERE _row_number = 1
-        ),
-        intervention_summary AS (
-            SELECT
-                rel.nct_id,
-                COUNT(DISTINCT rel.intervention_id) AS intervention_count,
-                MODE(entity.mesh_term) AS intervention_mesh_term
-            FROM interventions_studies_src AS rel
-            LEFT JOIN interventions_src AS entity USING (intervention_id)
-            WHERE rel.date < TIMESTAMP '{cutoff_sql}'
-            GROUP BY rel.nct_id
-        ),
-        condition_summary AS (
-            SELECT
-                rel.nct_id,
-                COUNT(DISTINCT rel.condition_id) AS condition_count,
-                MODE(entity.mesh_term) AS condition_mesh_term
-            FROM conditions_studies_src AS rel
-            LEFT JOIN conditions_src AS entity USING (condition_id)
-            WHERE rel.date < TIMESTAMP '{cutoff_sql}'
-            GROUP BY rel.nct_id
-        ),
-        sponsor_summary AS (
-            SELECT
-                rel.nct_id,
-                COUNT(DISTINCT rel.sponsor_id) AS sponsor_count,
-                MODE(entity.name) AS sponsor_name,
-                MODE(entity.agency_class) AS sponsor_agency_class,
-                MODE(rel.lead_or_collaborator) AS sponsor_role
-            FROM sponsors_studies_src AS rel
-            LEFT JOIN sponsors_src AS entity USING (sponsor_id)
-            WHERE rel.date < TIMESTAMP '{cutoff_sql}'
-            GROUP BY rel.nct_id
-        ),
-        trial_outcomes AS (
-            SELECT
-                analysis.nct_id,
-                analysis.date,
-                MIN(
-                    CASE WHEN analysis.p_value < 0.05 THEN 1.0 ELSE 0.0 END
-                ) AS is_successful
-            FROM outcome_analyses_src AS analysis
-            INNER JOIN outcomes_src AS outcome
-                ON analysis.outcome_id = outcome.id
-            WHERE analysis.date < TIMESTAMP '{cutoff_sql}'
-                AND (
-                    analysis.p_value_modifier IS NULL
-                    OR analysis.p_value_modifier != '>'
-                )
-                AND analysis.p_value BETWEEN 0 AND 1
-                AND outcome.outcome_type = 'Primary'
-            GROUP BY analysis.nct_id, analysis.date
-        ),
-        outcome_summary AS (
-            SELECT
-                nct_id,
-                COUNT(*) AS historical_outcome_count,
-                AVG(is_successful) AS historical_success_rate
-            FROM trial_outcomes
-            GROUP BY nct_id
-        ),
-        event_summary AS (
-            SELECT
-                nct_id,
-                COUNT(*) AS reported_event_count,
-                SUM(subjects_affected) AS subjects_affected,
-                SUM(subjects_at_risk) AS subjects_at_risk
-            FROM reported_event_totals_src
-            WHERE date < TIMESTAMP '{cutoff_sql}'
-            GROUP BY nct_id
-        )
-        SELECT
-            relation.id,
-            relation.nct_id,
-            relation.facility_id,
-            relation.date,
-            study.enrollment,
-            study.number_of_arms,
-            study.number_of_groups,
-            study.study_type,
-            study.phase,
-            study.enrollment_type,
-            study.source_class,
-            study.has_dmc,
-            study.is_fda_regulated_drug,
-            study.is_fda_regulated_device,
-            study.is_unapproved_device,
-            study.is_ppsd,
-            study.is_us_export,
-            study.fdaaa801_violation,
-            study.plan_to_share_ipd,
-            design.allocation,
-            design.intervention_model,
-            design.observational_model,
-            design.primary_purpose,
-            design.time_perspective,
-            design.masking,
-            design.subject_masked,
-            design.caregiver_masked,
-            design.investigator_masked,
-            design.outcomes_assessor_masked,
-            eligibility.sampling_method,
-            eligibility.gender,
-            eligibility.minimum_age,
-            eligibility.maximum_age,
-            eligibility.healthy_volunteers,
-            eligibility.gender_based,
-            eligibility.adult,
-            eligibility.child,
-            eligibility.older_adult,
-            intervention.intervention_count,
-            intervention.intervention_mesh_term,
-            condition.condition_count,
-            condition.condition_mesh_term,
-            sponsor.sponsor_count,
-            sponsor.sponsor_name,
-            sponsor.sponsor_agency_class,
-            sponsor.sponsor_role,
-            outcome.historical_outcome_count,
-            outcome.historical_success_rate,
-            event.reported_event_count,
-            event.subjects_affected,
-            event.subjects_at_risk
-        FROM facilities_studies_src AS relation
-        INNER JOIN studies_src AS study USING (nct_id)
-        LEFT JOIN design_latest AS design USING (nct_id)
-        LEFT JOIN eligibility_latest AS eligibility USING (nct_id)
-        LEFT JOIN intervention_summary AS intervention USING (nct_id)
-        LEFT JOIN condition_summary AS condition USING (nct_id)
-        LEFT JOIN sponsor_summary AS sponsor USING (nct_id)
-        LEFT JOIN outcome_summary AS outcome USING (nct_id)
-        LEFT JOIN event_summary AS event USING (nct_id)
-        WHERE relation.date < TIMESTAMP '{cutoff_sql}'
-            AND study.start_date <= TIMESTAMP '{task_date_sql}'
-        """
-    )
-    con.execute(
-        f"""
-        CREATE OR REPLACE TEMP VIEW site_history_summary_src AS
-        SELECT
-            facility_id,
-            COUNT(DISTINCT nct_id) AS study_count,
-            AVG(enrollment) AS enrollment_avg,
-            MAX(enrollment) AS enrollment_max,
-            AVG(number_of_arms) AS number_of_arms_avg,
-            MAX(number_of_arms) AS number_of_arms_max,
-            AVG(number_of_groups) AS number_of_groups_avg,
-            MAX(number_of_groups) AS number_of_groups_max,
-            ARG_MAX(study_type, date) AS latest_study_type,
-            ARG_MAX(phase, date) AS latest_phase,
-            ARG_MAX(enrollment_type, date) AS latest_enrollment_type,
-            ARG_MAX(source_class, date) AS latest_source_class,
-            AVG(CASE WHEN has_dmc THEN 1.0 ELSE 0.0 END) AS has_dmc_share,
-            AVG(
-                CASE WHEN is_fda_regulated_drug THEN 1.0 ELSE 0.0 END
-            ) AS fda_regulated_drug_share,
-            AVG(
-                CASE WHEN is_fda_regulated_device THEN 1.0 ELSE 0.0 END
-            ) AS fda_regulated_device_share,
-            AVG(
-                CASE WHEN is_unapproved_device THEN 1.0 ELSE 0.0 END
-            ) AS unapproved_device_share,
-            AVG(CASE WHEN is_ppsd THEN 1.0 ELSE 0.0 END) AS ppsd_share,
-            AVG(CASE WHEN is_us_export THEN 1.0 ELSE 0.0 END) AS us_export_share,
-            AVG(
-                CASE WHEN fdaaa801_violation THEN 1.0 ELSE 0.0 END
-            ) AS fdaaa801_violation_share,
-            ARG_MAX(plan_to_share_ipd, date) AS latest_plan_to_share_ipd,
-            ARG_MAX(allocation, date) AS latest_allocation,
-            ARG_MAX(intervention_model, date) AS latest_intervention_model,
-            ARG_MAX(observational_model, date) AS latest_observational_model,
-            ARG_MAX(primary_purpose, date) AS latest_primary_purpose,
-            ARG_MAX(time_perspective, date) AS latest_time_perspective,
-            ARG_MAX(masking, date) AS latest_masking,
-            AVG(CASE WHEN subject_masked THEN 1.0 ELSE 0.0 END) AS subject_masked_share,
-            AVG(CASE WHEN caregiver_masked THEN 1.0 ELSE 0.0 END) AS caregiver_masked_share,
-            AVG(
-                CASE WHEN investigator_masked THEN 1.0 ELSE 0.0 END
-            ) AS investigator_masked_share,
-            AVG(
-                CASE WHEN outcomes_assessor_masked THEN 1.0 ELSE 0.0 END
-            ) AS outcomes_assessor_masked_share,
-            ARG_MAX(sampling_method, date) AS latest_sampling_method,
-            ARG_MAX(gender, date) AS latest_gender,
-            ARG_MAX(minimum_age, date) AS latest_minimum_age,
-            ARG_MAX(maximum_age, date) AS latest_maximum_age,
-            ARG_MAX(healthy_volunteers, date) AS latest_healthy_volunteers,
-            AVG(CASE WHEN gender_based THEN 1.0 ELSE 0.0 END) AS gender_based_share,
-            AVG(CASE WHEN adult THEN 1.0 ELSE 0.0 END) AS adult_share,
-            AVG(CASE WHEN child THEN 1.0 ELSE 0.0 END) AS child_share,
-            AVG(CASE WHEN older_adult THEN 1.0 ELSE 0.0 END) AS older_adult_share,
-            SUM(intervention_count) AS intervention_count,
-            ARG_MAX(intervention_mesh_term, date) AS latest_intervention_mesh_term,
-            SUM(condition_count) AS condition_count,
-            ARG_MAX(condition_mesh_term, date) AS latest_condition_mesh_term,
-            SUM(sponsor_count) AS sponsor_count,
-            ARG_MAX(sponsor_name, date) AS latest_sponsor_name,
-            ARG_MAX(sponsor_agency_class, date) AS latest_sponsor_agency_class,
-            ARG_MAX(sponsor_role, date) AS latest_sponsor_role,
-            SUM(historical_outcome_count) AS historical_outcome_count,
-            SUM(
-                historical_success_rate * historical_outcome_count
-            ) / NULLIF(SUM(historical_outcome_count), 0) AS historical_success_rate,
-            SUM(reported_event_count) AS reported_event_count,
-            SUM(subjects_affected) AS subjects_affected,
-            SUM(subjects_at_risk) AS subjects_at_risk,
-            DATE_DIFF(
-                'day', MAX(date), TIMESTAMP '{cutoff_sql}'
-            ) AS days_since_latest_study
-        FROM site_study_history_src
-        GROUP BY facility_id
-        """
-    )
-    history_cols = (
-        con.sql("SELECT * FROM site_history_summary_src LIMIT 0")
-        .to_df()
-        .columns.tolist()
-    )
-    history_l = _by_lower(history_cols)
 
-    facilities = DuckdbNode(
-        fpath="facilities_src",
-        prefix="fac",
-        pk=facilities_l["facility_id"],
-        date_key=None,
-        columns=facilities_cols,
+    graph.do_transformations_sql()
+    features = con.sql(
+        f"SELECT * FROM {graph.parent_node._cur_data_ref}"
+    ).to_df().copy()
+    graph._clean_refs()
+    if registered_keys_ref is not None:
+        con.unregister(registered_keys_ref)
+    features["timestamp"] = pd.Timestamp(task_timestamp)
+    entity_feature_column = (
+        f"{_sql_name(entity_table)}_{db.table_dict[entity_table].pkey_col}"
     )
-    history = DuckdbNode(
-        fpath="site_history_summary_src",
-        prefix="hst",
-        pk=history_l["facility_id"],
-        date_key=None,
-        columns=history_cols,
-    )
-
-    if feature_manifest_samples is not None:
-        current_summary = apply_feature_manifests(
-            {"facilities": facilities},
-            TRIAL_FEATURE_MANIFEST_SOURCES,
-            feature_manifest_samples,
-        )
-        if feature_manifest_summary is not None and not feature_manifest_summary:
-            feature_manifest_summary.update(current_summary)
-
-    gr = _graph(
-        con,
-        f"rel_trial_site_features_{task_timestamp.date()}",
-        facilities,
-        [facilities, history],
-        cut_date,
-    )
-    gr.add_entity_edge(
-        facilities,
-        history,
-        facilities_l["facility_id"],
-        history_l["facility_id"],
-        reduce=False,
-    )
-
-    gr.do_transformations_sql()
-    frame = con.sql(f"SELECT * FROM {gr.parent_node._cur_data_ref}").to_df().copy()
-    gr._clean_refs()
-    frame["timestamp"] = task_timestamp
-    return frame
+    return features, entity_feature_column
 
 
-def build_task_split_frame(
+def _build_split(
     con: duckdb.DuckDBPyConnection,
-    table_columns: dict[str, list[str]],
+    db: object,
     task_name: str,
     split: str,
-    feature_builder: Callable[..., pd.DataFrame],
-    feature_entity_col: str,
-    max_train_frames: int | None = None,
-    feature_manifest_samples: dict[str, pd.DataFrame] | None = None,
-    feature_manifest_summary: dict[str, dict[str, int]] | None = None,
-) -> tuple[object, pd.DataFrame, pd.Timestamp]:
-    task, task_table, cut_timestamps = get_relbench_split_task_table(
-        "rel-trial", task_name, split, download=True
+) -> tuple[object, RelBenchFrameStore]:
+    task, task_table, timestamps = get_relbench_split_task_table(
+        DATASET_NAME,
+        task_name,
+        split,
+        download=True,
+        db=db,
     )
-    if split == "train":
-        cut_timestamps = _select_evenly_spaced_timestamps(
-            cut_timestamps, max_train_frames
-        )
-    frame_store = RelBenchFrameStore(
-        f"rel-trial-{task_name}-{split}", persist_each_frame=True
+    store = RelBenchFrameStore(
+        f"generic-{DATASET_NAME}-{task_name}-{split}",
+        persist_each_frame=True,
     )
     labels = task_table.df.copy()
-    labels["_relbench_entity_key"] = labels[task.entity_col].astype(str)
-    def build_frame(frame_con: duckdb.DuckDBPyConnection, cut_timestamp: pd.Timestamp) -> pd.DataFrame:
-        features = feature_builder(
+    labels[task.time_col] = pd.to_datetime(labels[task.time_col])
+    labels["_entity_key"] = labels[task.entity_col].astype(str)
+
+    def build_frame(
+        frame_con: duckdb.DuckDBPyConnection,
+        timestamp: pd.Timestamp,
+    ) -> pd.DataFrame:
+        timestamp_labels = labels[
+            labels[task.time_col] == pd.Timestamp(timestamp)
+        ]
+        features, entity_feature_column = build_generic_trial_features(
             frame_con,
-            table_columns,
-            cut_timestamp,
-            feature_manifest_samples=feature_manifest_samples,
-            feature_manifest_summary=feature_manifest_summary,
+            db,
+            task.entity_table,
+            pd.Timestamp(timestamp),
+            entity_keys=timestamp_labels[task.entity_col],
         )
-        features["_relbench_entity_key"] = features[feature_entity_col].astype(str)
-        timestamp_labels = labels[labels[task.time_col] == cut_timestamp]
+        features["_entity_key"] = features[entity_feature_column].astype(str)
         return features.merge(
-            timestamp_labels[["_relbench_entity_key", task.time_col, task.entity_col, task.target_col]],
-            left_on=["timestamp", "_relbench_entity_key"],
-            right_on=[task.time_col, "_relbench_entity_key"],
+            timestamp_labels[
+                ["_entity_key", task.time_col, task.entity_col, task.target_col]
+            ],
+            left_on=["timestamp", "_entity_key"],
+            right_on=[task.time_col, "_entity_key"],
             how="right",
             validate="one_to_one",
-        ).drop(columns=["_relbench_entity_key"])
+        ).drop(columns=["_entity_key"])
 
-    frame_workers = None if split == "train" else 1
-    for frame in iter_training_frames(con, cut_timestamps, build_frame, workers=frame_workers):
-        frame_store.append(frame)
-    return task, frame_store, cut_timestamps[-1]
+    workers = None if split == "train" else 1
+    for frame in iter_training_frames(con, timestamps, build_frame, workers=workers):
+        store.append(frame)
+    return task, store
 
 
-def select_shared_numeric_features(
-    train_df: pd.DataFrame,
-    val_df: pd.DataFrame,
-    test_df: pd.DataFrame,
-    target_col: str,
-    excluded_cols: set[str],
+def select_generic_model_features(
+    train: pd.DataFrame,
+    validation: pd.DataFrame,
+    test: pd.DataFrame,
+    *,
+    target_column: str,
+    excluded_columns: set[str],
 ) -> list[str]:
-    common_columns = set(train_df.columns) & set(val_df.columns) & set(test_df.columns)
+    """Select one task-independent set of CatBoost-compatible columns."""
+
+    common = set(train.columns) & set(validation.columns) & set(test.columns)
     return [
         column
-        for column in train_df.select_dtypes(include=[np.number, "bool"]).columns
-        if column != target_col
-        and column not in excluded_cols
-        and "label" not in column.lower()
-        and not column.lower().endswith("_id")
-        and column in common_columns
-    ]
-
-
-def select_shared_model_features(
-    train_df: pd.DataFrame,
-    val_df: pd.DataFrame,
-    test_df: pd.DataFrame,
-    target_col: str,
-    excluded_cols: set[str],
-) -> list[str]:
-    """Select stable numeric and categorical columns for the model backend."""
-
-    common_columns = set(train_df.columns) & set(val_df.columns) & set(test_df.columns)
-    return [
-        column
-        for column in train_df.columns
-        if column != target_col
-        and column not in excluded_cols
-        and "label" not in column.lower()
-        and not column.lower().endswith("_id")
-        and column in common_columns
-        and not pd.api.types.is_datetime64_any_dtype(train_df[column])
+        for column in train.columns
+        if column in common
+        and column != target_column
+        and column not in excluded_columns
+        and not pd.api.types.is_datetime64_any_dtype(train[column])
         and (
-            pd.api.types.is_numeric_dtype(train_df[column])
-            or pd.api.types.is_bool_dtype(train_df[column])
-            or pd.api.types.is_object_dtype(train_df[column])
-            or pd.api.types.is_string_dtype(train_df[column])
-            or isinstance(train_df[column].dtype, pd.CategoricalDtype)
+            pd.api.types.is_numeric_dtype(train[column])
+            or pd.api.types.is_bool_dtype(train[column])
+            or pd.api.types.is_object_dtype(train[column])
+            or pd.api.types.is_string_dtype(train[column])
+            or isinstance(train[column].dtype, pd.CategoricalDtype)
         )
     ]
 
 
-def prepare_model_inputs(
+def prepare_generic_model_inputs(
     frame: pd.DataFrame,
-    feature_columns: list[str],
-    categorical_indices: list[int] | None = None,
+    feature_columns: Sequence[str],
+    categorical_indices: Sequence[int] | None = None,
 ) -> tuple[pd.DataFrame, list[int]]:
-    """Freeze the training categorical layout and normalize missing values."""
+    """Normalize model inputs and replay the training categorical layout."""
 
-    inputs = frame.reindex(columns=feature_columns).copy()
-    frozen_categorical_indices = (
-        None if categorical_indices is None else set(categorical_indices)
-    )
-    inferred_categorical_indices: list[int] = []
+    inputs = frame.reindex(columns=list(feature_columns)).copy()
+    frozen = None if categorical_indices is None else set(categorical_indices)
+    inferred: list[int] = []
     for index, column in enumerate(feature_columns):
         series = inputs[column]
-        is_categorical = (
-            index in frozen_categorical_indices
-            if frozen_categorical_indices is not None
+        categorical = (
+            index in frozen
+            if frozen is not None
             else (
                 pd.api.types.is_object_dtype(series)
                 or pd.api.types.is_string_dtype(series)
                 or isinstance(series.dtype, pd.CategoricalDtype)
             )
         )
-        if is_categorical:
+        if categorical:
             inputs[column] = series.fillna("__missing__").astype(str)
-            inferred_categorical_indices.append(index)
+            inferred.append(index)
         else:
             inputs[column] = pd.to_numeric(series, errors="coerce").fillna(0)
-    return inputs, inferred_categorical_indices
+    return inputs, inferred
 
 
-def bounded_probability_candidates(
-    regression_predictions: np.ndarray,
-    probability_predictions: np.ndarray,
-) -> dict[str, np.ndarray]:
-    """Build bounded site-success candidates from two complementary losses."""
-
-    regression = np.clip(
-        np.asarray(regression_predictions, dtype="float64"),
-        0.0,
-        1.0,
-    )
-    probability = np.clip(
-        np.asarray(probability_predictions, dtype="float64"),
-        0.0,
-        1.0,
-    )
-    if regression.shape != probability.shape:
-        raise ValueError("Prediction candidates must have matching shapes")
-    return {
-        "mae_regression": regression,
-        "cross_entropy_probability": probability,
-        "equal_weight_blend": 0.5 * (regression + probability),
-    }
+def _task_type_name(task: object) -> str:
+    task_type = getattr(task.task_type, "value", task.task_type)
+    if task_type not in {"binary_classification", "regression"}:
+        raise ValueError(f"Unsupported rel-trial task type: {task_type}")
+    return str(task_type)
 
 
-def select_bounded_probability_candidate(
-    target: pd.Series,
-    regression_predictions: np.ndarray,
-    probability_predictions: np.ndarray,
-) -> tuple[str, np.ndarray, dict[str, float]]:
-    """Select a bounded prediction strategy using validation MAE only."""
-
-    target_values = target.to_numpy(dtype="float64")
-    candidates = bounded_probability_candidates(
-        regression_predictions,
-        probability_predictions,
-    )
-    scores = {
-        name: float(mean_absolute_error(target_values, predictions))
-        for name, predictions in candidates.items()
-    }
-    selected_name = min(scores, key=scores.__getitem__)
-    return selected_name, candidates[selected_name], scores
-
-
-def run_rel_trial_regression_task(
+def run_generic_rel_trial_task(
     task_name: str,
-    feature_builder: Callable[..., pd.DataFrame],
-    feature_entity_col: str,
     data_dir: Path | None = None,
-    max_train_frames: int | None = None,
-    model_backend: str | None = None,
-    use_feature_manifest: bool = False,
-    bounded_probability_target: bool = False,
-    include_categorical_features: bool = False,
-) -> tuple[RelBenchFrameStore, pd.DataFrame, pd.DataFrame, dict[str, float] | None, dict[str, float] | None, int, list[str], str]:
-    model_backend = selected_model_backend(override=model_backend)
-    materialized: list[str] = []
+) -> tuple[
+    RelBenchFrameStore,
+    pd.DataFrame,
+    pd.DataFrame,
+    dict[str, float] | None,
+    dict[str, float] | None,
+    int,
+    list[str],
+    str,
+]:
+    """Run a RelBench Trial task without any task-specific feature behavior."""
 
+    del data_dir  # RelBench owns dataset retrieval and caching.
+    _, db = get_relbench_dataset_db(
+        DATASET_NAME,
+        download=True,
+        upto_test_timestamp=False,
+    )
     con = duckdb.connect()
-    split_frames: dict[str, RelBenchFrameStore] = {}
     split_tasks: dict[str, object] = {}
-    feature_manifest_summary: dict[str, dict[str, int]] = {}
-
+    split_stores: dict[str, RelBenchFrameStore] = {}
     try:
-        table_columns = prepare_trial_views(con)
-        feature_manifest_samples = (
-            load_feature_manifest_samples(
-                con,
-                TRIAL_FEATURE_MANIFEST_SOURCES,
-                TRIAL_VALIDATION_CUT_DATE,
-            )
-            if use_feature_manifest
-            else None
+        register_relbench_db_views(
+            con,
+            db,
+            {table_name: _view_name(table_name) for table_name in db.table_dict},
         )
-        for split_name in ["train", "val", "test"]:
-            task, frame_store, _ = build_task_split_frame(
-                con,
-                table_columns,
-                task_name,
-                split_name,
-                feature_builder,
-                feature_entity_col,
-                max_train_frames=max_train_frames,
-                feature_manifest_samples=feature_manifest_samples,
-                feature_manifest_summary=feature_manifest_summary,
-            )
-            split_tasks[split_name] = task
-            split_frames[split_name] = frame_store
+        for split in ("train", "val", "test"):
+            task, store = _build_split(con, db, task_name, split)
+            split_tasks[split] = task
+            split_stores[split] = store
     finally:
         con.close()
 
-    if use_feature_manifest:
-        print("feature_manifest_profile:", feature_manifest_summary, flush=True)
+    train_store = split_stores["train"]
+    validation = split_stores["val"].to_dataframe()
+    test = split_stores["test"].to_dataframe()
+    split_stores["val"].close()
+    split_stores["test"].close()
 
-    train_store = split_frames["train"]
-    df_val = split_frames["val"].to_dataframe()
-    df_test = split_frames["test"].to_dataframe()
-    split_frames["val"].close()
-    split_frames["test"].close()
-    target = split_tasks["train"].target_col
-
+    task = split_tasks["train"]
+    target = task.target_col
     train_sample = train_store.sample_frame()
-    feature_selector = (
-        select_shared_model_features
-        if include_categorical_features
-        else select_shared_numeric_features
-    )
-    feature_columns = feature_selector(
+    root_pk = db.table_dict[task.entity_table].pkey_col
+    root_feature_key = f"{_sql_name(task.entity_table)}_{root_pk}"
+    features = select_generic_model_features(
         train_sample,
-        df_val,
-        df_test,
-        target,
-        excluded_cols={split_tasks["train"].entity_col, feature_entity_col},
+        validation,
+        test,
+        target_column=target,
+        excluded_columns={task.entity_col, root_feature_key},
     )
-    if not feature_columns:
-        return train_store, df_val, df_test, None, None, 0, materialized, target
+    if not features:
+        return train_store, validation, test, None, None, 0, [], target
 
-    _, categorical_indices = prepare_model_inputs(train_sample, feature_columns)
-    val_inputs, _ = prepare_model_inputs(
-        df_val,
-        feature_columns,
-        categorical_indices,
+    _, categorical_indices = prepare_generic_model_inputs(train_sample, features)
+    validation_inputs, _ = prepare_generic_model_inputs(
+        validation, features, categorical_indices
     )
-    test_inputs, _ = prepare_model_inputs(
-        df_test,
-        feature_columns,
-        categorical_indices,
-    )
+    test_inputs, _ = prepare_generic_model_inputs(test, features, categorical_indices)
 
-    def train_batches():
+    task_type = _task_type_name(task)
+
+    def train_batches() -> Iterator[pd.DataFrame]:
         for batch in train_store.iter_batches():
-            inputs, _ = prepare_model_inputs(
-                batch,
-                feature_columns,
-                categorical_indices,
+            inputs, _ = prepare_generic_model_inputs(
+                batch, features, categorical_indices
             )
-            inputs[target] = batch[target].fillna(0).astype("float64").to_numpy()
+            if task_type == "binary_classification":
+                inputs[target] = batch[target].astype("int8").to_numpy()
+            else:
+                inputs[target] = (
+                    pd.to_numeric(batch[target], errors="coerce")
+                    .fillna(0)
+                    .astype("float64")
+                    .to_numpy()
+                )
             yield inputs
 
-    print("model_backend:", model_backend, flush=True)
-    val_target = df_val[target].astype("float64")
-    if model_backend == "tabpfn":
-        model, best_val_mae, val_predictions = fit_tabpfn_regressor(
+    backend = selected_model_backend()
+    print("model_backend:", backend, flush=True)
+    if task_type == "binary_classification":
+        if train_store.target_nunique(target) < 2 or validation[target].nunique() < 2:
+            return train_store, validation, test, None, None, len(features), [], target
+        model, best_config, best_score = fit_tuned_classifier_incremental(
             train_batches,
-            feature_columns,
+            features,
             target,
-            val_inputs,
-            val_target,
-        )
-        print(
-            "tabpfn_version:",
-            importlib.metadata.version("tabpfn"),
-            flush=True,
-        )
-        print("tabpfn_validation_mae:", best_val_mae, flush=True)
-        test_predictions = np.asarray(model.predict(test_inputs), dtype="float64")
-        if bounded_probability_target:
-            val_predictions = np.clip(val_predictions, 0.0, 1.0)
-            test_predictions = np.clip(test_predictions, 0.0, 1.0)
-            print("bounded_prediction_selection:", "tabpfn_regression", flush=True)
-    else:
-        regression_model, best_config, best_val_mae = fit_tuned_regressor_incremental(
-            train_batches,
-            feature_columns,
-            target,
-            val_inputs,
-            val_target,
+            validation_inputs,
+            validation[target].astype("int8"),
             batch_count=len(train_store.part_paths),
             cat_features=categorical_indices,
-            model_backend=model_backend,
+            model_backend=backend,
         )
-        print("catboost_config:", best_config, flush=True)
-        print("catboost_validation_mae:", best_val_mae, flush=True)
-        print(
-            "catboost_best_iteration:",
-            regression_model.get_best_iteration(),
-            flush=True,
+        print("model_config:", best_config, flush=True)
+        print("validation_model_score:", best_score, flush=True)
+        validation_predictions = np.asarray(
+            model.predict_proba(validation_inputs)[:, 1], dtype="float64"
         )
-        regression_val_predictions = np.asarray(
-            regression_model.predict(val_inputs),
-            dtype="float64",
+        test_predictions = np.asarray(
+            model.predict_proba(test_inputs)[:, 1], dtype="float64"
         )
-
-        if bounded_probability_target:
-            probability_model, probability_config, probability_val_mae = (
-                fit_tuned_cross_entropy_model_incremental(
-                    train_batches,
-                    feature_columns,
-                    target,
-                    val_inputs,
-                    val_target,
-                    batch_count=len(train_store.part_paths),
-                    cat_features=categorical_indices,
-                )
-            )
-            probability_val_predictions = np.asarray(
-                probability_model.predict_proba(val_inputs)[:, 1],
-                dtype="float64",
-            )
-            selected_name, val_predictions, candidate_mae = (
-                select_bounded_probability_candidate(
-                    val_target,
-                    regression_val_predictions,
-                    probability_val_predictions,
-                )
-            )
-            print("catboost_probability_config:", probability_config, flush=True)
-            print(
-                "catboost_probability_validation_mae:",
-                probability_val_mae,
-                flush=True,
-            )
-            print(
-                "catboost_probability_best_iteration:",
-                probability_model.get_best_iteration(),
-                flush=True,
-            )
-            print("bounded_candidate_validation_mae:", candidate_mae, flush=True)
-            print("bounded_prediction_selection:", selected_name, flush=True)
-
-            regression_test_predictions = np.asarray(
-                regression_model.predict(test_inputs),
-                dtype="float64",
-            )
-            probability_test_predictions = np.asarray(
-                probability_model.predict_proba(test_inputs)[:, 1],
-                dtype="float64",
-            )
-            test_predictions = bounded_probability_candidates(
-                regression_test_predictions,
-                probability_test_predictions,
-            )[selected_name]
-        else:
-            val_predictions = regression_val_predictions
-            test_predictions = np.asarray(
-                regression_model.predict(test_inputs),
-                dtype="float64",
-            )
-    val_metrics = add_nmae(
-        split_tasks["val"].evaluate(
-            val_predictions,
-            target_table=target_table_from_frame(split_tasks["val"], df_val),
-        ),
-        df_val[target],
-        val_predictions,
-        train_store.target_std(target),
-    )
-    test_metrics = add_nmae(
-        split_tasks["test"].evaluate(
+        validation_metrics = split_tasks["val"].evaluate(
+            validation_predictions,
+            target_table=target_table_from_frame(split_tasks["val"], validation),
+        )
+        test_metrics = split_tasks["test"].evaluate(
             test_predictions,
-            target_table=target_table_from_frame(split_tasks["test"], df_test),
-        ),
-        df_test[target],
-        test_predictions,
-        train_store.target_std(target),
-    )
+            target_table=target_table_from_frame(split_tasks["test"], test),
+        )
+    else:
+        validation_target = (
+            pd.to_numeric(validation[target], errors="coerce")
+            .fillna(0)
+            .astype("float64")
+        )
+        model, best_config, best_score = fit_tuned_regressor_incremental(
+            train_batches,
+            features,
+            target,
+            validation_inputs,
+            validation_target,
+            batch_count=len(train_store.part_paths),
+            cat_features=categorical_indices,
+            model_backend=backend,
+        )
+        print("model_config:", best_config, flush=True)
+        print("validation_model_score:", best_score, flush=True)
+        validation_predictions = np.asarray(
+            model.predict(validation_inputs), dtype="float64"
+        )
+        test_predictions = np.asarray(model.predict(test_inputs), dtype="float64")
+        validation_metrics = add_nmae(
+            split_tasks["val"].evaluate(
+                validation_predictions,
+                target_table=target_table_from_frame(split_tasks["val"], validation),
+            ),
+            validation_target,
+            validation_predictions,
+            train_store.target_std(target),
+        )
+        test_metrics = add_nmae(
+            split_tasks["test"].evaluate(
+                test_predictions,
+                target_table=target_table_from_frame(split_tasks["test"], test),
+            ),
+            test[target],
+            test_predictions,
+            train_store.target_std(target),
+        )
 
-    return train_store, df_val, df_test, val_metrics, test_metrics, len(feature_columns), materialized, target
+    return (
+        train_store,
+        validation,
+        test,
+        validation_metrics,
+        test_metrics,
+        len(features),
+        [],
+        target,
+    )

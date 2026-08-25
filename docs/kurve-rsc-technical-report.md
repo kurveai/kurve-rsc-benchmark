@@ -2,7 +2,7 @@
 title: "Kurve RSC"
 subtitle: "Multi-Cutoff Relational Signal Compression, Downstream Learning, and Kurve RSC Feature Families"
 author: "Kurve RSC Technical Report"
-date: "August 24, 2026"
+date: "August 25, 2026"
 lang: en-US
 papersize: letter
 fontsize: 10pt
@@ -531,6 +531,61 @@ $$
 The normalization denominator comes from training targets only. Submission
 generation joins predictions back to untouched official test keys and checks
 exact key coverage before writing a file.
+
+\newpage
+
+# Empirical results
+
+## RelBench v1 entity classification
+
+Kurve RSC was evaluated on all 12 entity-classification tasks in RelBench v1.
+The run used CatBoost, multiple official training cutoffs
+(`single_train_period=false`), joint all-at-once fitting, and the official
+RelBench evaluators. Most runners used the full available training schedule;
+the two Stack classification runners used the reproducible 15-frame policy
+described in Exhibit A. All 12 tasks completed and produced validated
+submission files. The Kurve RSC column below reports test AUROC from that
+August 25, 2026 run. Its validation macro-average was 0.7997 and its test
+macro-average was 0.8020.
+
+For external context, the remaining columns reproduce the selected
+configuration's test AUROC from Appendix D, Table 4 of the August 2026
+RelArena-$\alpha$ report [10]. TabPFN-Rel denotes its hosted API variant with
+TabPFN-3 and text support; RDBLearn is the DFS-plus-tabular-foundation-model
+pipeline described in [11]; RelGNN and RelGT are the RelArena-$\alpha$
+reproductions selected on validation performance. The final row is the
+unweighted arithmetic mean across the same 12 classification tasks.
+
+| Task | Kurve RSC | TabPFN-Rel | RDBLearn | RelGNN | RelGT |
+|---|---:|---:|---:|---:|---:|
+| `amazon/item-churn` | 0.8130 | 0.8280 | 0.8195 | 0.7856 | 0.8238 |
+| `amazon/user-churn` | 0.6921 | 0.7086 | 0.6844 | 0.6943 | 0.7019 |
+| `avito/user-clicks` | 0.7878 | 0.6752 | 0.6788 | 0.6676 | 0.6444 |
+| `avito/user-visits` | 0.8296 | 0.6680 | 0.6596 | 0.6487 | 0.6621 |
+| `event/user-ignore` | 0.8106 | 0.8787 | 0.6644 | 0.8054 | 0.7815 |
+| `event/user-repeat` | 0.7750 | 0.7593 | 0.7441 | 0.7546 | 0.7344 |
+| `f1/driver-dnf` | 0.8183 | 0.7322 | 0.7146 | 0.7261 | 0.7117 |
+| `f1/driver-top3` | 0.9148 | 0.7714 | 0.7801 | 0.7589 | 0.8108 |
+| `hm/user-churn` | 0.6944 | 0.7052 | 0.6984 | 0.6820 | 0.6895 |
+| `stack/user-badge` | 0.8570 | 0.8804 | 0.7711 | 0.6206 | 0.5743 |
+| `stack/user-engagement` | 0.8969 | 0.9060 | 0.8587 | 0.9051 | 0.9067 |
+| `trial/study-outcome` | 0.7340 | 0.7647 | 0.7212 | 0.6574 | 0.6685 |
+| **Unweighted mean** | **0.8020** | **0.7731** | **0.7329** | **0.7255** | **0.7258** |
+
+These columns are not a controlled re-run inside one harness. Kurve RSC and
+the four RelArena-$\alpha$ baselines share the official task names and metrics,
+but may differ in package revision, database state, tuning budget, timestamp
+boundary treatment, and execution protocol. RelArena-$\alpha$ itself documents
+why such differences can materially affect relational benchmark comparisons
+[10]. The table should therefore be read as transparent cross-system context,
+not as an isolated architecture ablation.
+
+The Kurve RSC result is also a **system** result rather than a claim that one
+task-blind configuration produced every row. The non-Trial runners in this
+classification set contain problem-specific graph, node, feature, or learner
+configuration; several additionally contain explicit semantic or context
+rules. `rel-trial/study-outcome` uses the shared schema-driven generic Trial
+runner. Those distinctions must accompany any leaderboard interpretation.
 
 \newpage
 
@@ -1175,6 +1230,16 @@ boundary particularly useful: the same relational frames can feed a fitted
 tree ensemble today and a pretrained tabular learner without changing the
 upstream time and graph semantics.
 
+RDBLearn combines automated relational aggregation with an interchangeable
+tabular in-context learner [11]. TabPFN-Rel builds on that recipe with a
+TabPFN-3 backend, revised tuning and context selection, and an API variant that
+restores entity-table text after relational featurization [10].
+RelArena-$\alpha$ re-evaluates these flattening approaches alongside relational
+graph models including RelGNN and RelGT under a shared model interface and
+reports the per-task comparison used in this report [10]. Its results reinforce
+the practical importance of strong relational-to-tabular baselines while also
+showing how evaluation regime and tuning can confound comparisons.
+
 ## Embedded analytical execution
 
 Kurve RSC's reference SQL path uses DuckDB, an in-process analytical database
@@ -1322,3 +1387,170 @@ contract.
 9. M. Raasveldt and H. Mühleisen. **DuckDB: An Embeddable Analytical
    Database.** ACM SIGMOD, 2019.
    [doi:10.1145/3299869.3320212](https://doi.org/10.1145/3299869.3320212).
+
+10. A. Hayler, K. Flöge, A. Arazi, R. Ranjan, J. Leskovec, L. Purucker,
+    F. Hutter, N. Hollmann, and the Prior Labs Team. **Advancing Open and
+    Reproducible Relational Learning: RelArena-$\alpha$, TabPFN-Rel and RPI.**
+    2026. [arXiv:2608.16319](https://arxiv.org/abs/2608.16319) and
+    [official RelArena results snapshot](https://github.com/PriorLabs/relarena/tree/main/baseline_results).
+
+11. Y. Zhang, L. Xu, Q. Gan, D. Wipf, and M. Wang. **RDBLearn: Simple
+    In-Context Prediction Over Relational Databases.** 2026.
+    [arXiv:2602.18495](https://arxiv.org/abs/2602.18495).
+
+\newpage
+
+# Exhibit A: Task-configuration disclosure {-}
+
+## A.1 Scope and notation {-}
+
+This exhibit records the executable task configuration in the Kurve RSC
+repository as of August 25, 2026. It covers all 21 RelBench v1 tasks launched
+by `scripts/run_all.py`: 12 classification tasks and nine regression tasks.
+The Python runner named in the exhibit is the source of truth. The launcher
+does **not** load `configs/tasks/*.yaml`; those files do not alter a full run
+unless a runner explicitly reads them.
+
+The configuration classes make the distinction between tuning and custom
+feature logic auditable:
+
+| Code | Meaning |
+|---|---|
+| **G** | Generic schema-driven policy shared across tasks; task identity supplies only the official task contract. |
+| **P** | Problem-specific graph, node, column, feature-budget, or learner policy. |
+| **C** | Explicit context keys define a grouped or conditioned feature context. |
+| **S** | Explicit semantic predicates add domain-authored annotations. These features are not inferred automatically. |
+
+Codes compose: **P+C+S** means that the runner contains all three forms of
+problem-specific behavior. Root names and depth $d$ describe the executed
+GraphReduce graph. “All families” means `base`, `semantic`, `conditional`,
+`temporal`, `sequence`, `episode`, and `context` were enabled on the stated
+node; it does not imply that every family emits a feature for every column.
+
+## A.2 Full-run profile {-}
+
+For the classification result in this report, `run_all.py` set the backend to
+CatBoost, `single_train_period=false`, `train_all_at_once=true`, and
+`KURVE_RSC_FEATURE_MANIFEST=0`. Validation data controlled estimator selection
+or early stopping; test labels did not. Except for the Stack runners, the
+training-frame count $K$ followed the selected official cutoff schedule. Each
+Stack runner used at most 15 reproducibly stratified training cutoffs with seed
+42 and always retained the latest training cutoff. Validation and test frames
+used the official task timestamps; submission mode expanded test coverage to
+all official test keys.
+
+All problem-specific rows below still consume official RelBench tables and
+task contracts. **P** identifies implementation choices beyond top-level $K$,
+$d$, and ordinary learner hyperparameters; it does not mean that labels or
+metrics were redefined.
+
+## A.3 Classification tasks {-}
+
+| Task | Root | $d$ | Class |
+|---|---|---:|---:|
+| `rel-amazon/user-churn` | customer | 1 | P |
+| `rel-amazon/item-churn` | product | 1 | P |
+| `rel-avito/user-visits` | user | 3 | P |
+| `rel-avito/user-clicks` | user | 3 | P |
+| `rel-event/user-repeat` | user | 3 | P+C |
+| `rel-event/user-ignore` | user | 3 | P+C+S |
+| `rel-f1/driver-dnf` | driver | 3 | P+C+S |
+| `rel-f1/driver-top3` | driver | 3 | P+C+S |
+| `rel-hm/user-churn` | customer | 2 | P |
+| `rel-stack/user-engagement` | user | 3 | P |
+| `rel-stack/user-badge` | user | 4 | P |
+| `rel-trial/study-outcome` | studies | 1 | G |
+
+Executed policies:
+
+- **`rel-amazon/user-churn`:** explicit customer--review--product graph;
+  review text disabled; review limited to `base`, four family columns, and
+  top-5 categories; fixed balanced incremental classifier.
+- **`rel-amazon/item-churn`:** explicit product--review--customer graph; the
+  same bounded, base-only review policy; fixed balanced incremental classifier.
+- **`rel-avito/user-visits`:** explicit seven-node user, visit, ad, search,
+  category, and location graph; fixed classifier.
+- **`rel-avito/user-clicks`:** explicit seven-node user, visit, ad, search,
+  category, and location graph; fixed classifier.
+- **`rel-event/user-repeat`:** explicit five-node graph; attendee and interest
+  nodes use all families, event context keys, four-family-column budgets, and
+  top-5 categories; tuned incremental classifier.
+- **`rel-event/user-ignore`:** repeat-style graph plus
+  `is_attending := status IN ('yes','maybe')` and
+  `is_declined := status='no'` attendee annotations; tuned balanced incremental
+  classifier.
+- **`rel-f1/driver-dnf`:** explicit driver/results/standings/race/circuit/
+  constructor graph; results use all families, `(race, constructor)` context,
+  and `did_not_finish := status_id != 1`; tuned incremental classifier.
+- **`rel-f1/driver-top3`:** explicit seven-node F1 graph; qualifying uses all
+  families, `(race, constructor)` context, and `is_top3 := position <= 3`;
+  tuned incremental classifier.
+- **`rel-hm/user-churn`:** explicit customer--transaction--article graph;
+  articles are base-only; transactions use base plus temporal windows
+  `{1,7,30,90,365}`; text is disabled and category/column budgets are bounded;
+  fixed classifier.
+- **`rel-stack/user-engagement`:** hand-selected columns and paths; the root
+  filter requires prior post, vote, or comment activity; includes the
+  post-comment-user-badge path; 15-frame schedule; fixed incremental classifier.
+- **`rel-stack/user-badge`:** hand-selected nine-node graph with separate
+  user- and post-side vote/comment paths; windows
+  `{7,30,90,180,365,730,1825,3650}` days; 15-frame schedule; fixed incremental
+  classifier.
+- **`rel-trial/study-outcome`:** shared generic Trial builder: all schema
+  tables, metadata-derived nodes/timestamps/FKs, deterministic cycle-free
+  spanning tree, database-derived lookback, and task-independent feature/model
+  selection.
+
+## A.4 Regression tasks {-}
+
+| Task | Root | $d$ | Class |
+|---|---|---:|---:|
+| `rel-amazon/user-ltv` | customer | 1 | P |
+| `rel-amazon/item-ltv` | product | 1 | P |
+| `rel-avito/ad-ctr` | ad | 2 | P |
+| `rel-event/user-attendance` | user | 3 | P+C+S |
+| `rel-f1/driver-position` | driver | 3 | P+C |
+| `rel-hm/item-sales` | article | 3 | P |
+| `rel-stack/post-votes` | post | 4 | P |
+| `rel-trial/study-adverse` | studies | 1 | G |
+| `rel-trial/site-success` | facilities | 1 | G |
+
+Executed policies:
+
+- **`rel-amazon/user-ltv`:** explicit customer--review--product graph; review
+  text disabled and review limited to bounded `base` features;
+  validation-selected incremental regressor.
+- **`rel-amazon/item-ltv`:** explicit product--review--customer graph; review
+  text disabled and review limited to bounded `base` features; bounded
+  validation-selected incremental regressor.
+- **`rel-avito/ad-ctr`:** explicit ad/search-stream/category/location graph;
+  search stream uses all families with one family column and top-1 category;
+  validation-selected regressor.
+- **`rel-event/user-attendance`:** explicit six-node graph; the attendee node
+  uses event context and all families plus `is_attending` and `is_declined`
+  predicates; tuned incremental regressor.
+- **`rel-f1/driver-position`:** explicit six-node F1 graph; results use all
+  families with `(race, constructor)` context; tuned incremental regressor.
+- **`rel-hm/item-sales`:** explicit article/customer/transaction graph with
+  manual edge orientation and numeric-only model input; fixed CatBoost
+  regressor.
+- **`rel-stack/post-votes`:** hand-selected post-centered graph; restricts
+  roots to questions with valid owners and traverses votes, comments, history,
+  links, owner, and badges; 15-frame schedule; fixed incremental regressor.
+- **`rel-trial/study-adverse`:** the same generic Trial builder and
+  task-independent policy as `study-outcome`; task type selects the generic
+  regression path.
+- **`rel-trial/site-success`:** the same generic Trial builder, rooted from
+  official task metadata at facilities; task type selects the generic
+  regression path.
+
+## A.5 Interpretation {-}
+
+The three Trial rows are the only entries in this snapshot with no
+task-specific graph, node, semantic, context, or learner branch. Their graph
+topology is generated from RelBench primary/foreign-key metadata, and their
+root, labels, timestamps, and metric come from the official task object. The
+remaining 18 tasks are valid Kurve RSC system configurations, but they are not
+evidence for a single task-blind feature policy. Any performance table should
+be read together with this exhibit, and future revisions should update the
+exhibit whenever an executed runner changes.

@@ -27,6 +27,7 @@ from relbench_catboost_utils import (
     fit_tabpfn_classifier,
     selected_model_backend,
 )
+from relbench_feature_policy import apply_feature_family_policy, configure_task_cli
 
 TABLE_NAME_TO_FILENAME = {
     "article": "article.parquet",
@@ -163,7 +164,9 @@ def run_rel_hm_user_churn(
                 auto_feature_hops_front=0,
             )
 
-                for node in [customer, article, transactions]:
+                nodes = [customer, article, transactions]
+                apply_feature_family_policy(nodes)
+                for node in nodes:
                     graph.add_node(node)
 
                 graph.add_entity_edge(customer, transactions, parent_key=customer_id_col, relation_key=tx_customer_col, reduce=True)
@@ -276,4 +279,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    configure_task_cli(description=__doc__)
     main()

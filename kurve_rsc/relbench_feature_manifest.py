@@ -13,11 +13,8 @@ from graphreduce.node import DuckdbNode
 
 
 FEATURE_MANIFEST_ENV = "KURVE_RSC_FEATURE_MANIFEST"
-LEGACY_TRIAL_FEATURE_MANIFEST_ENV = "KURVE_RSC_TRIAL_FEATURE_MANIFEST"
 FEATURE_MANIFEST_SAMPLE_ROWS = 10_000
-FEATURE_MANIFEST_TASKS = frozenset(
-    {"rel-trial/study-outcome", "rel-trial/site-success"}
-)
+FEATURE_MANIFEST_TASKS: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -29,42 +26,6 @@ class FeatureManifestSource:
     foreign_keys: tuple[str, ...] = ()
     excluded_columns: tuple[str, ...] = ()
     unsafe_columns: tuple[str, ...] = ()
-
-
-TRIAL_VALIDATION_CUT_DATE = pd.Timestamp("2020-01-01")
-TRIAL_FEATURE_MANIFEST_SOURCES = {
-    "studies": FeatureManifestSource("studies_src", "start_date"),
-    "outcomes": FeatureManifestSource("outcomes_src", "date", ("nct_id",)),
-    "outcome_analyses": FeatureManifestSource(
-        "outcome_analyses_src", "date", ("nct_id", "outcome_id")
-    ),
-    "drop_withdrawals": FeatureManifestSource(
-        "drop_withdrawals_src", "date", ("nct_id",)
-    ),
-    "reported_event_totals": FeatureManifestSource(
-        "reported_event_totals_src", "date", ("nct_id",)
-    ),
-    "designs": FeatureManifestSource("designs_src", "date", ("nct_id",)),
-    "eligibilities": FeatureManifestSource(
-        "eligibilities_src", "date", ("nct_id",)
-    ),
-    "interventions_studies": FeatureManifestSource(
-        "interventions_studies_src", "date", ("nct_id", "intervention_id")
-    ),
-    "conditions_studies": FeatureManifestSource(
-        "conditions_studies_src", "date", ("nct_id", "condition_id")
-    ),
-    "facilities_studies": FeatureManifestSource(
-        "facilities_studies_src", "date", ("nct_id", "facility_id")
-    ),
-    "sponsors_studies": FeatureManifestSource(
-        "sponsors_studies_src", "date", ("nct_id", "sponsor_id")
-    ),
-    "interventions": FeatureManifestSource("interventions_src"),
-    "conditions": FeatureManifestSource("conditions_src"),
-    "facilities": FeatureManifestSource("facilities_src"),
-    "sponsors": FeatureManifestSource("sponsors_src"),
-}
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -79,10 +40,7 @@ def _env_flag(name: str, default: bool = False) -> bool:
 def feature_manifest_enabled(task_name: str | None = None) -> bool:
     """Return whether the opt-in is requested and enabled for this task."""
 
-    if FEATURE_MANIFEST_ENV in os.environ:
-        requested = _env_flag(FEATURE_MANIFEST_ENV)
-    else:
-        requested = _env_flag(LEGACY_TRIAL_FEATURE_MANIFEST_ENV)
+    requested = _env_flag(FEATURE_MANIFEST_ENV)
     if task_name is None:
         return requested
     return requested and task_name in FEATURE_MANIFEST_TASKS

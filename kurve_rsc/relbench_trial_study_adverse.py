@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""RelBench rel-trial: study adverse events example using official task tables."""
+"""Generic GraphReduce implementation of rel-trial/study-adverse."""
 
 from __future__ import annotations
 
@@ -12,46 +12,66 @@ if str(REPO_ROOT) not in sys.path:
 
 import pandas as pd
 
-from relbench_trial_task_utils import build_study_features, run_rel_trial_regression_task
-from relbench_feature_manifest import feature_manifest_enabled
+try:
+    from .trial_builder import run_generic_rel_trial_task
+    from .relbench_feature_policy import configure_task_cli
+except ImportError:  # Direct script execution.
+    from relbench_trial_task_utils import run_generic_rel_trial_task
+    from relbench_feature_policy import configure_task_cli
 
 
 def run_rel_trial_study_adverse(
     data_dir: Path | None = None,
-    *,
-    use_feature_manifest: bool = False,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, float] | None, dict[str, float] | None, int, list[str], str]:
-    return run_rel_trial_regression_task(
-        task_name="study-adverse",
-        feature_builder=build_study_features,
-        feature_entity_col="std_nct_id",
-        data_dir=data_dir,
-        use_feature_manifest=use_feature_manifest,
-    )
+) -> tuple[
+    object,
+    pd.DataFrame,
+    pd.DataFrame,
+    dict[str, float] | None,
+    dict[str, float] | None,
+    int,
+    list[str],
+    str,
+]:
+    return run_generic_rel_trial_task("study-adverse", data_dir=data_dir)
 
 
 def main() -> None:
-    use_feature_manifest = feature_manifest_enabled("rel-trial/study-adverse")
-    df_train, df_val, df_test, val_metrics, test_metrics, n_features, materialized, target = (
-        run_rel_trial_study_adverse(use_feature_manifest=use_feature_manifest)
+    train, validation, test, val_metrics, test_metrics, count, files, target = (
+        run_rel_trial_study_adverse()
     )
-    print("feature_manifest_enabled:", use_feature_manifest, flush=True)
-    print("materialized_files:", materialized, flush=True)
+    print("implementation:", "generic", flush=True)
+    print("materialized_files:", files, flush=True)
     print("task:", "study-adverse", flush=True)
     print("target:", target, flush=True)
-    print("train_rows:", len(df_train), flush=True)
-    print("validation_rows:", len(df_val), flush=True)
-    print("test_rows:", len(df_test), flush=True)
-    print("train_timestamps:", df_train.column_nunique("timestamp"), flush=True)
-    print("validation_timestamps:", df_val["timestamp"].nunique(), flush=True)
-    print("test_timestamps:", df_test["timestamp"].nunique(), flush=True)
-    print("columns:", len(df_train.columns), flush=True)
-    print("feature_count:", n_features, flush=True)
-    print("validation_nmae:", val_metrics["nmae"] if val_metrics is not None else "skipped", flush=True)
-    print("test_nmae:", test_metrics["nmae"] if test_metrics is not None else "skipped", flush=True)
-    print("validation_metrics:", val_metrics if val_metrics is not None else "skipped", flush=True)
-    print("test_metrics:", test_metrics if test_metrics is not None else "skipped", flush=True)
+    print("train_rows:", len(train), flush=True)
+    print("validation_rows:", len(validation), flush=True)
+    print("test_rows:", len(test), flush=True)
+    print("train_timestamps:", train.column_nunique("timestamp"), flush=True)
+    print("validation_timestamps:", validation["timestamp"].nunique(), flush=True)
+    print("test_timestamps:", test["timestamp"].nunique(), flush=True)
+    print("feature_count:", count, flush=True)
+    print(
+        "validation_nmae:",
+        val_metrics["nmae"] if val_metrics is not None else "skipped",
+        flush=True,
+    )
+    print(
+        "test_nmae:",
+        test_metrics["nmae"] if test_metrics is not None else "skipped",
+        flush=True,
+    )
+    print(
+        "validation_metrics:",
+        val_metrics if val_metrics is not None else "skipped",
+        flush=True,
+    )
+    print(
+        "test_metrics:",
+        test_metrics if test_metrics is not None else "skipped",
+        flush=True,
+    )
 
 
 if __name__ == "__main__":
+    configure_task_cli(description=__doc__)
     main()

@@ -23,6 +23,7 @@ from relbench_dataset_utils import (
     target_table_from_frame,
 )
 from relbench_catboost_utils import fit_incremental_classifier, set_feature_families
+from relbench_feature_policy import apply_feature_family_policy, configure_task_cli
 
 TABLE_NAME_TO_FILENAME = {
     "customer": "customer.parquet",
@@ -139,7 +140,9 @@ def run_rel_amazon_item_churn(
                 use_temp_tables=True,
             )
 
-                for node in [customer_node, product_node, review_node]:
+                nodes = [customer_node, product_node, review_node]
+                apply_feature_family_policy(nodes)
+                for node in nodes:
                     graph.add_node(node)
 
                 graph.add_entity_edge(customer_node, review_node, parent_key=customer_id, relation_key=review_customer_id, reduce=True)
@@ -246,4 +249,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    configure_task_cli(description=__doc__)
     main()

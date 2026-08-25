@@ -24,6 +24,7 @@ from relbench_dataset_utils import (
 )
 from relbench_regression_metrics import add_nmae
 from relbench_catboost_utils import fit_tuned_regressor_incremental, set_feature_families
+from relbench_feature_policy import apply_feature_family_policy, configure_task_cli
 
 VALIDATION_CUT_DATE = datetime.datetime(2015, 10, 1)
 TEST_CUT_DATE = datetime.datetime(2016, 1, 1)
@@ -168,6 +169,7 @@ def _build_feature_frames(
         review_node.feature_family_max_columns = 4
         review_node.categorical_top_k = 5
         set_feature_families([review_node], ("base",))
+        apply_feature_family_policy(nodes)
         for node in nodes:
             graph.add_node(node)
 
@@ -354,4 +356,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    configure_task_cli(description=__doc__)
     main()

@@ -16,6 +16,7 @@ from relbench_stack_task_utils import (
 )
 from relbench_regression_metrics import add_nmae
 from relbench_catboost_utils import fit_incremental_regressor
+from relbench_feature_policy import configure_task_cli
 
 
 def _print_steps_summary(materialized_files: list[str], result_text: str) -> None:
@@ -141,4 +142,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    configure_task_cli(description=__doc__)
     main()

@@ -17,6 +17,7 @@ from graphreduce.enum import ComputeLayerEnum, PeriodUnit, SQLOpType
 from graphreduce.graph_reduce import GraphReduce
 from graphreduce.models import sqlop
 from graphreduce.node import DuckdbNode
+from relbench_feature_policy import apply_feature_family_policy
 
 from relbench_dataset_utils import (
     RelBenchFrameStore,
@@ -253,6 +254,7 @@ def build_user_badge_features(
         auto_feature_hops_back=4,
         auto_feature_hops_front=0,
     )
+    apply_feature_family_policy(nodes)
     for node in nodes:
         gr.add_node(node)
 
@@ -361,6 +363,7 @@ def build_user_engagement_features(
         post_comment_user,
         post_comment_badge,
     ]
+    apply_feature_family_policy(nodes)
     for node in nodes:
         gr.add_node(node)
 
@@ -419,6 +422,7 @@ def build_post_votes_features(
         auto_feature_hops_front=0,
     )
     nodes = [post, vote, comment, post_history, post_links, user, badge]
+    apply_feature_family_policy(nodes)
     for node in nodes:
         gr.add_node(node)
 

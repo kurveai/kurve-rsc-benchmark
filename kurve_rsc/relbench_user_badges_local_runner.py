@@ -15,6 +15,7 @@ from relbench_stack_task_utils import (
     target_table_from_frame,
 )
 from relbench_catboost_utils import fit_incremental_classifier
+from relbench_feature_policy import configure_task_cli
 
 
 def main() -> None:
@@ -112,4 +113,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    configure_task_cli(description=__doc__)
     main()

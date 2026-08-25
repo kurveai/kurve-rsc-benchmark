@@ -26,6 +26,7 @@ from relbench_catboost_utils import (
     fit_tabpfn_classifier,
     selected_model_backend,
 )
+from relbench_feature_policy import apply_feature_family_policy, configure_task_cli
 
 TABLE_NAME_TO_FILENAME = {
     "AdsInfo": "AdsInfo.parquet",
@@ -170,7 +171,7 @@ def run_rel_avito_user_visits(
                     use_temp_tables=True,
                 )
 
-                for node in [
+                nodes = [
                     user_node,
                     visits_node,
                     ads_node,
@@ -178,7 +179,9 @@ def run_rel_avito_user_visits(
                     search_stream_node,
                     category_node,
                     location_node,
-                ]:
+                ]
+                apply_feature_family_policy(nodes)
+                for node in nodes:
                     graph.add_node(node)
 
                 graph.add_entity_edge(user_node, visits_node, parent_key=user_id, relation_key=visit_user_id, reduce=True)
@@ -299,4 +302,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    configure_task_cli(description=__doc__)
     main()

@@ -1,0 +1,28 @@
+{
+  "task_type": "classification",
+  "single_train_period": false,
+  "model_backend": "catboost",
+  "train_all_at_once": true,
+  "submission_dir": null,
+  "task_count": 1,
+  "passed_count": 1,
+  "failed_count": 0,
+  "results": [
+    {
+      "task_id": "relbench_event_user_ignore",
+      "status": "passed",
+      "return_code": 0,
+      "duration_seconds": 241.711,
+      "started_at_utc": "2026-08-15T19:34:39.916483+00:00",
+      "log_path": "results/user-ignore-all-at-once-check/logs/relbench_event_user_ignore.log",
+      "highlights": [
+        "frozen_execution_plan: split=train cutoff=2012-06-20T00:00:00 records=10 features=1439",
+        "training_mode: all_at_once",
+        "feature_count: 1432",
+        "validation_metrics: {'accuracy': 0.877297565822156, 'average_precision': 0.623613097391179, 'f1': 0.5348399246704332, 'roc_auc': 0.8897750331938773}",
+        "test_metrics: {'accuracy': 0.8707865168539326, 'average_precision': 0.5272422485025313, 'f1': 0.5048923679060665, 'roc_auc': 0.7981532013862503}"
+      ],
+      "submission_written": false
+    }
+  ]
+}

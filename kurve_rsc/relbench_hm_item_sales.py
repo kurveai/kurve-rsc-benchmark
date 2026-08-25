@@ -27,6 +27,7 @@ from relbench_catboost_utils import (
     fit_tabpfn_regressor,
     selected_model_backend,
 )
+from relbench_feature_policy import apply_feature_family_policy, configure_task_cli
 
 TABLE_NAME_TO_FILENAME = {
     "article": "article.parquet",
@@ -122,7 +123,9 @@ def run_rel_hm_item_sales(
                     auto_feature_hops_front=0,
                 )
 
-                for node in [article, customer, transactions]:
+                nodes = [article, customer, transactions]
+                apply_feature_family_policy(nodes)
+                for node in nodes:
                     graph.add_node(node)
 
                 graph.add_entity_edge(article, transactions, parent_key=article_id_col, relation_key=tx_article_col, reduce=True)
@@ -249,4 +252,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    configure_task_cli(description=__doc__)
     main()

@@ -19,6 +19,7 @@ from relbench_dataset_utils import (
 )
 from relbench_regression_metrics import add_nmae
 from relbench_catboost_utils import TEMPORAL_FEATURE_FAMILIES, set_feature_families, fit_tuned_regressor
+from relbench_feature_policy import apply_feature_family_policy, configure_task_cli
 
 from graphreduce.enum import ComputeLayerEnum, PeriodUnit
 from graphreduce.graph_reduce import GraphReduce
@@ -147,6 +148,7 @@ def run_rel_avito_ad_ctr(
                     search_stream_node,
                 ]
                 set_feature_families([search_stream_node], TEMPORAL_FEATURE_FAMILIES)
+                apply_feature_family_policy(nodes)
                 for node in nodes:
                     graph.add_node(node)
 
@@ -257,4 +259,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    configure_task_cli(description=__doc__)
     main()

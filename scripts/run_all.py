@@ -21,13 +21,8 @@ SINGLE_TRAIN_PERIOD_ENV = "RELBENCH_SINGLE_TRAIN_PERIOD"
 MODEL_BACKEND_ENV = "KURVE_RSC_MODEL_BACKEND"
 TRAIN_ALL_AT_ONCE_ENV = "KURVE_RSC_TRAIN_ALL_AT_ONCE"
 FEATURE_MANIFEST_ENV = "KURVE_RSC_FEATURE_MANIFEST"
+BASELINE_FEATURE_FAMILY_ENV = "KURVE_RSC_BASELINE_FEATURE_FAMILY"
 SUBMISSION_DIR_ENV = "KURVE_RSC_SUBMISSION_DIR"
-FEATURE_MANIFEST_TASKS = frozenset(
-    {
-        "relbench_trial_study_outcome.py",
-        "relbench_trial_site_success.py",
-    }
-)
 
 CLASSIFICATION_TASKS = (
     "relbench_amazon_user_churn.py",
@@ -148,12 +143,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--feature-manifest",
+        "--baseline",
         action=argparse.BooleanOptionalAction,
-        default=_env_flag(FEATURE_MANIFEST_ENV),
+        default=_env_flag(BASELINE_FEATURE_FAMILY_ENV),
         help=(
-            "Fit and apply GraphReduce feature manifests for rel-trial "
-            "study-outcome and site-success. Other tasks are unchanged."
+            "Use only the baseline 'base' feature family on every graph node. "
+            "The default preserves each task's configured feature families."
         ),
     )
     parser.add_argument(
@@ -202,12 +197,6 @@ def expected_submission_filenames(task_type: str) -> set[str]:
     }
 
 
-def feature_manifest_enabled_for_task(task_name: str, requested: bool) -> bool:
-    """Return whether run_all should enable manifests for one task process."""
-
-    return requested and task_name in FEATURE_MANIFEST_TASKS
-
-
 def prepare_submission_dir(path: Path, task_type: str) -> None:
     path.mkdir(parents=True, exist_ok=True)
     expected = expected_submission_filenames(task_type)
@@ -229,11 +218,8 @@ def run_task(task_name: str, args: argparse.Namespace, log_path: Path) -> dict[s
     env[SINGLE_TRAIN_PERIOD_ENV] = "1" if args.single_train_period else "0"
     env[MODEL_BACKEND_ENV] = "tabpfn" if args.tabpfn else "catboost"
     env[TRAIN_ALL_AT_ONCE_ENV] = "1" if args.train_all_at_once else "0"
-    env[FEATURE_MANIFEST_ENV] = (
-        "1"
-        if feature_manifest_enabled_for_task(task_name, args.feature_manifest)
-        else "0"
-    )
+    env[BASELINE_FEATURE_FAMILY_ENV] = "1" if args.baseline else "0"
+    env[FEATURE_MANIFEST_ENV] = "0"
     if args.submission_dir is not None:
         env[SUBMISSION_DIR_ENV] = str(args.submission_dir)
     else:
@@ -268,8 +254,8 @@ def run_task(task_name: str, args: argparse.Namespace, log_path: Path) -> dict[s
                     "single_train_cut_date:",
                     "frozen_execution_plan:",
                     "model_backend:",
+                    "feature_family_mode:",
                     "training_mode:",
-                    "feature_manifest_enabled:",
                     "submission_prediction:",
                     "validation_metrics:",
                     "test_metrics:",
@@ -301,15 +287,15 @@ def write_report(
     single_train_period: bool = False,
     model_backend: str = "catboost",
     train_all_at_once: bool = False,
-    feature_manifest: bool = False,
     submission_dir: Path | None = None,
+    baseline: bool = False,
 ) -> None:
     payload = {
         "task_type": task_type,
         "single_train_period": single_train_period,
         "model_backend": model_backend,
         "train_all_at_once": train_all_at_once,
-        "feature_manifest": feature_manifest,
+        "baseline": baseline,
         "submission_dir": str(submission_dir) if submission_dir is not None else None,
         "task_count": len(results),
         "passed_count": sum(result["status"] == "passed" for result in results),
@@ -325,7 +311,7 @@ def write_report(
         f"- Single train period: `{single_train_period}`",
         f"- Model backend: `{model_backend}`",
         f"- Train all at once: `{train_all_at_once}`",
-        f"- Feature manifest: `{feature_manifest}` (study-outcome and site-success only)",
+        f"- Baseline feature family only: `{baseline}`",
         f"- Submission directory: `{submission_dir or 'disabled'}`",
         f"- Passed: `{payload['passed_count']}`",
         f"- Failed: `{payload['failed_count']}`",
@@ -361,11 +347,7 @@ def main() -> int:
     model_backend = "tabpfn" if args.tabpfn else "catboost"
     print(f"Model backend: {model_backend}", flush=True)
     print(f"Train all at once: {args.train_all_at_once}", flush=True)
-    print(
-        "Feature manifest: "
-        f"{args.feature_manifest} (study-outcome and site-success only)",
-        flush=True,
-    )
+    print(f"Baseline feature family only: {args.baseline}", flush=True)
     if resolved_submission_dir is not None:
         print(f"Submission directory: {resolved_submission_dir}", flush=True)
     results: list[dict[str, object]] = []
@@ -384,11 +366,11 @@ def main() -> int:
         results,
         args.output_dir,
         args.task_type,
-        args.single_train_period,
-        model_backend,
-        args.train_all_at_once,
-        args.feature_manifest,
-        resolved_submission_dir,
+        single_train_period=args.single_train_period,
+        model_backend=model_backend,
+        train_all_at_once=args.train_all_at_once,
+        submission_dir=resolved_submission_dir,
+        baseline=args.baseline,
     )
     passed = all(result["status"] == "passed" for result in results)
     if resolved_submission_dir is not None:

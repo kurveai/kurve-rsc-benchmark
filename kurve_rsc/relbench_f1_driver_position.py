@@ -20,6 +20,7 @@ from relbench_dataset_utils import (
 )
 from relbench_regression_metrics import add_nmae
 from relbench_catboost_utils import TEMPORAL_FEATURE_FAMILIES, fit_tuned_regressor_incremental, set_feature_families
+from relbench_feature_policy import apply_feature_family_policy, configure_task_cli
 from relbench_feature_manifest import (
     FeatureManifestSource,
     apply_feature_manifests,
@@ -246,6 +247,7 @@ def run_rel_f1_driver_position(
                     )
                     if not feature_manifest_summary:
                         feature_manifest_summary.update(current_summary)
+                apply_feature_family_policy(nodes)
                 for node in nodes:
                     graph.add_node(node)
 
@@ -402,4 +404,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    configure_task_cli(description=__doc__)
     main()

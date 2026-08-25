@@ -4,140 +4,116 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+from relbench.base import Database, Table
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "kurve_rsc"))
 
-from kurve_rsc import relbench_trial_site_success
+from kurve_rsc import (
+    relbench_trial_site_success,
+    relbench_trial_study_adverse,
+    relbench_trial_study_outcome,
+)
 from kurve_rsc.trial_builder import (
-    SITE_DESIGN_FEATURE_COLUMNS,
-    SITE_ELIGIBILITY_FEATURE_COLUMNS,
-    SITE_FACILITY_FEATURE_COLUMNS,
-    SITE_SUCCESS_FEATURE_FAMILIES,
-    SITE_STUDY_FEATURE_COLUMNS,
-    _select_evenly_spaced_timestamps,
-    bounded_probability_candidates,
-    prepare_model_inputs,
-    select_shared_model_features,
-    select_bounded_probability_candidate,
+    _feature_cutoff,
+    _schema_tree_edges,
+    prepare_generic_model_inputs,
+    select_generic_model_features,
 )
 
 
-def test_site_success_uses_compact_feature_families():
-    assert SITE_SUCCESS_FEATURE_FAMILIES == ("base", "semantic", "context")
-
-
-def test_site_success_keeps_structured_trial_and_geography_columns():
-    assert {
-        "phase",
-        "source_class",
-        "study_type",
-        "has_dmc",
-        "is_fda_regulated_drug",
-        "is_fda_regulated_device",
-    } <= set(SITE_STUDY_FEATURE_COLUMNS)
-    assert {"city", "state", "zip", "country"} <= set(
-        SITE_FACILITY_FEATURE_COLUMNS
-    )
-    assert {"allocation", "primary_purpose", "masking"} <= set(
-        SITE_DESIGN_FEATURE_COLUMNS
-    )
-    assert {"gender", "minimum_age", "maximum_age", "healthy_volunteers"} <= set(
-        SITE_ELIGIBILITY_FEATURE_COLUMNS
+def _table(
+    columns: dict[str, list[object]],
+    *,
+    primary_key: str,
+    foreign_keys: dict[str, str] | None = None,
+    time_column: str | None = None,
+) -> Table:
+    return Table(
+        df=pd.DataFrame(columns),
+        fkey_col_to_pkey_table=foreign_keys or {},
+        pkey_col=primary_key,
+        time_col=time_column,
     )
 
 
-def test_trial_model_features_retain_and_freeze_categoricals():
+def test_schema_tree_is_derived_from_metadata_and_drops_cycles() -> None:
+    db = Database(
+        {
+            "entities": _table({"id": [1]}, primary_key="id"),
+            "events": _table(
+                {"event_id": [1], "entity_id": [1]},
+                primary_key="event_id",
+                foreign_keys={"entity_id": "entities"},
+            ),
+            "details": _table(
+                {"detail_id": [1], "entity_id": [1], "event_id": [1]},
+                primary_key="detail_id",
+                foreign_keys={"entity_id": "entities", "event_id": "events"},
+            ),
+        }
+    )
+
+    edges = _schema_tree_edges(db, "entities")
+
+    assert edges == [
+        ("entities", "details", "entity_id", "entities"),
+        ("entities", "events", "entity_id", "entities"),
+    ]
+
+
+def test_feature_cutoff_only_includes_the_exact_task_timestamp() -> None:
+    timestamp = pd.Timestamp("2020-01-01")
+
+    assert _feature_cutoff(timestamp) == timestamp + pd.Timedelta(microseconds=1)
+
+
+def test_generic_model_features_and_categorical_layout_are_shared() -> None:
     train = pd.DataFrame(
         {
-            "fac_facility_id": [1, 2],
-            "fac_country": ["United States", None],
-            "std_phase_count": [2, 1],
+            "entity_id": [1, 2],
+            "country": ["US", None],
+            "count": [2, 1],
             "timestamp": pd.to_datetime(["2020-01-01", "2020-01-01"]),
             "target": [0.5, 0.7],
         }
     )
-    val = train.assign(fac_country=["Canada", "United States"])
-    test = train.assign(fac_country=[None, "Canada"])
+    validation = train.assign(country=["CA", "US"])
+    test = train.assign(country=[None, "CA"])
 
-    features = select_shared_model_features(
+    features = select_generic_model_features(
         train,
-        val,
+        validation,
         test,
-        "target",
-        {"fac_facility_id"},
+        target_column="target",
+        excluded_columns={"entity_id"},
     )
-    train_inputs, categorical_indices = prepare_model_inputs(train, features)
-    test_inputs, replayed_indices = prepare_model_inputs(
-        test,
-        features,
-        categorical_indices,
+    train_inputs, categorical_indices = prepare_generic_model_inputs(train, features)
+    test_inputs, replayed_indices = prepare_generic_model_inputs(
+        test, features, categorical_indices
     )
 
-    assert features == ["fac_country", "std_phase_count"]
+    assert features == ["country", "count"]
     assert categorical_indices == [0]
-    assert replayed_indices == categorical_indices
-    assert train_inputs["fac_country"].tolist() == ["United States", "__missing__"]
-    assert test_inputs["fac_country"].tolist() == ["__missing__", "Canada"]
+    assert replayed_indices == [0]
+    assert train_inputs["country"].tolist() == ["US", "__missing__"]
+    assert test_inputs["country"].tolist() == ["__missing__", "CA"]
 
 
-def test_trial_training_timestamp_sampling_keeps_full_range():
-    timestamps = list(pd.date_range("2001-01-01", periods=19, freq="YS"))
+def test_all_trial_entry_points_use_the_same_generic_runner(monkeypatch) -> None:
+    calls: list[str] = []
+    expected = object()
 
-    selected = _select_evenly_spaced_timestamps(timestamps, 5)
+    def fake_run(task_name: str, data_dir=None):
+        calls.append(task_name)
+        return expected
 
-    assert len(selected) == 5
-    assert selected[0] == timestamps[0]
-    assert selected[-1] == timestamps[-1]
-    assert selected == [timestamps[index] for index in (0, 4, 9, 14, 18)]
+    modules_and_functions = [
+        (relbench_trial_study_outcome, "run_rel_trial_study_outcome"),
+        (relbench_trial_study_adverse, "run_rel_trial_study_adverse"),
+        (relbench_trial_site_success, "run_rel_trial_site_success"),
+    ]
+    for module, function_name in modules_and_functions:
+        monkeypatch.setattr(module, "run_generic_rel_trial_task", fake_run)
+        assert getattr(module, function_name)() is expected
 
-
-def test_trial_training_timestamp_sampling_does_not_oversample_short_ranges():
-    timestamps = list(pd.date_range("2020-01-01", periods=3, freq="D"))
-
-    assert _select_evenly_spaced_timestamps(timestamps, 5) == timestamps
-
-
-def test_bounded_probability_candidates_clip_regression_predictions():
-    candidates = bounded_probability_candidates(
-        regression_predictions=pd.Series([-0.2, 0.4, 1.2]).to_numpy(),
-        probability_predictions=pd.Series([0.1, 0.6, 0.9]).to_numpy(),
-    )
-
-    assert candidates["mae_regression"].tolist() == [0.0, 0.4, 1.0]
-    assert candidates["cross_entropy_probability"].tolist() == [0.1, 0.6, 0.9]
-    assert candidates["equal_weight_blend"].tolist() == [0.05, 0.5, 0.95]
-
-
-def test_probability_candidate_selection_uses_validation_mae():
-    selected_name, predictions, scores = select_bounded_probability_candidate(
-        pd.Series([0.0, 1.0, 0.5]),
-        regression_predictions=pd.Series([0.4, 0.6, 0.5]).to_numpy(),
-        probability_predictions=pd.Series([0.1, 0.9, 0.5]).to_numpy(),
-    )
-
-    assert selected_name == "cross_entropy_probability"
-    assert predictions.tolist() == [0.1, 0.9, 0.5]
-    assert scores["cross_entropy_probability"] < scores["equal_weight_blend"]
-    assert scores["equal_weight_blend"] < scores["mae_regression"]
-
-
-def test_site_success_enables_bounded_probability_model_selection(monkeypatch):
-    captured: dict[str, object] = {}
-    expected_result = object()
-
-    def fake_run(**kwargs):
-        captured.update(kwargs)
-        return expected_result
-
-    monkeypatch.setattr(
-        relbench_trial_site_success,
-        "run_rel_trial_regression_task",
-        fake_run,
-    )
-
-    result = relbench_trial_site_success.run_rel_trial_site_success()
-
-    assert result is expected_result
-    assert captured["task_name"] == "site-success"
-    assert captured["bounded_probability_target"] is True
-    assert captured["include_categorical_features"] is True
+    assert calls == ["study-outcome", "study-adverse", "site-success"]
