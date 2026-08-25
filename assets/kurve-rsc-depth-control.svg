@@ -1,0 +1,107 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="850" viewBox="0 0 1800 850" role="img" aria-labelledby="title desc">
+  <title id="title">Kurve RSC relational depth control</title>
+  <desc id="desc">The prediction entity is at depth zero. Increasing the depth parameter includes tables at successively greater foreign-key distance and allows their reduced signals to propagate toward the entity grain.</desc>
+
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#071322"/><stop offset="1" stop-color="#111b31"/></linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000814" flood-opacity="0.42"/></filter>
+    <marker id="arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="9" markerHeight="9" orient="auto"><path d="M1 1 L11 6 L1 11 Z" fill="#7dd3fc"/></marker>
+  </defs>
+  <rect width="1800" height="850" fill="url(#bg)"/>
+  <circle cx="260" cy="700" r="330" fill="#14b8a6" opacity="0.04"/>
+  <circle cx="1510" cy="80" r="290" fill="#7c3aed" opacity="0.05"/>
+
+  <g font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+    <text x="70" y="72" fill="#f8fafc" font-size="42" font-weight="760">Depth controls how far relational signal can travel</text>
+    <text x="70" y="112" fill="#a9bdd2" font-size="20">At every cutoff, Kurve RSC includes the entity root and tables reachable within d foreign-key hops.</text>
+
+    <!-- Depth bands -->
+    <g transform="translate(70 165)">
+      <rect x="0" y="0" width="300" height="560" rx="28" fill="#10354a" stroke="#22d3ee" stroke-width="2" opacity="0.92"/>
+      <rect x="320" y="0" width="320" height="560" rx="28" fill="#152e4a" stroke="#60a5fa" stroke-width="2" opacity="0.92"/>
+      <rect x="660" y="0" width="320" height="560" rx="28" fill="#242747" stroke="#a78bfa" stroke-width="2" opacity="0.92"/>
+      <rect x="1000" y="0" width="320" height="560" rx="28" fill="#302442" stroke="#d8b4fe" stroke-width="2" opacity="0.92"/>
+
+      <rect x="25" y="22" width="104" height="31" rx="15.5" fill="#155e75"/><text x="77" y="43" fill="#cffafe" font-size="15" font-weight="740" text-anchor="middle">depth 0</text>
+      <rect x="345" y="22" width="104" height="31" rx="15.5" fill="#1e4c7c"/><text x="397" y="43" fill="#dbeafe" font-size="15" font-weight="740" text-anchor="middle">depth 1</text>
+      <rect x="685" y="22" width="104" height="31" rx="15.5" fill="#513b82"/><text x="737" y="43" fill="#ede9fe" font-size="15" font-weight="740" text-anchor="middle">depth 2</text>
+      <rect x="1025" y="22" width="104" height="31" rx="15.5" fill="#633477"/><text x="1077" y="43" fill="#fae8ff" font-size="15" font-weight="740" text-anchor="middle">depth 3</text>
+
+      <!-- edges behind nodes -->
+      <g fill="none" stroke="#6387a5" stroke-width="3">
+        <path d="M242 280 C300 225 330 188 390 165"/>
+        <path d="M242 280 C300 335 330 372 390 395"/>
+        <path d="M550 165 C610 165 650 165 710 165"/>
+        <path d="M550 395 C610 355 650 325 710 305"/>
+        <path d="M550 395 C610 435 650 465 710 485"/>
+        <path d="M870 165 C930 165 990 165 1050 165"/>
+        <path d="M870 305 C930 335 990 365 1050 395"/>
+        <path d="M870 485 C930 485 990 485 1050 485"/>
+      </g>
+
+      <g filter="url(#shadow)">
+        <rect x="55" y="225" width="187" height="110" rx="20" fill="#0d4658" stroke="#67e8f9" stroke-width="2.5"/>
+        <text x="148.5" y="267" fill="#ecfeff" font-size="19" font-weight="760" text-anchor="middle">prediction entity</text>
+        <text x="148.5" y="294" fill="#a5f3fc" font-size="14" text-anchor="middle">one output row</text>
+        <text x="148.5" y="317" fill="#a5f3fc" font-size="14" text-anchor="middle">per key and cutoff</text>
+
+        <rect x="390" y="120" width="160" height="90" rx="18" fill="#163d61" stroke="#60a5fa" stroke-width="2"/>
+        <text x="470" y="158" fill="#eff6ff" font-size="18" font-weight="720" text-anchor="middle">events</text>
+        <text x="470" y="183" fill="#bfdbfe" font-size="13" text-anchor="middle">1-to-many</text>
+        <rect x="390" y="350" width="160" height="90" rx="18" fill="#163d61" stroke="#60a5fa" stroke-width="2"/>
+        <text x="470" y="388" fill="#eff6ff" font-size="18" font-weight="720" text-anchor="middle">relationships</text>
+        <text x="470" y="413" fill="#bfdbfe" font-size="13" text-anchor="middle">bridge table</text>
+
+        <rect x="710" y="120" width="160" height="90" rx="18" fill="#322b5b" stroke="#a78bfa" stroke-width="2"/>
+        <text x="790" y="158" fill="#f5f3ff" font-size="18" font-weight="720" text-anchor="middle">event details</text>
+        <text x="790" y="183" fill="#ddd6fe" font-size="13" text-anchor="middle">measurements</text>
+        <rect x="710" y="260" width="160" height="90" rx="18" fill="#322b5b" stroke="#a78bfa" stroke-width="2"/>
+        <text x="790" y="298" fill="#f5f3ff" font-size="18" font-weight="720" text-anchor="middle">related entity</text>
+        <text x="790" y="323" fill="#ddd6fe" font-size="13" text-anchor="middle">attributes</text>
+        <rect x="710" y="440" width="160" height="90" rx="18" fill="#322b5b" stroke="#a78bfa" stroke-width="2"/>
+        <text x="790" y="478" fill="#f5f3ff" font-size="18" font-weight="720" text-anchor="middle">membership</text>
+        <text x="790" y="503" fill="#ddd6fe" font-size="13" text-anchor="middle">context</text>
+
+        <rect x="1050" y="120" width="160" height="90" rx="18" fill="#492b5a" stroke="#d8b4fe" stroke-width="2"/>
+        <text x="1130" y="158" fill="#fdf4ff" font-size="18" font-weight="720" text-anchor="middle">taxonomy</text>
+        <text x="1130" y="183" fill="#f5d0fe" font-size="13" text-anchor="middle">category detail</text>
+        <rect x="1050" y="350" width="160" height="90" rx="18" fill="#492b5a" stroke="#d8b4fe" stroke-width="2"/>
+        <text x="1130" y="388" fill="#fdf4ff" font-size="18" font-weight="720" text-anchor="middle">organization</text>
+        <text x="1130" y="413" fill="#f5d0fe" font-size="13" text-anchor="middle">deep context</text>
+        <rect x="1050" y="440" width="160" height="90" rx="18" fill="#492b5a" stroke="#d8b4fe" stroke-width="2"/>
+        <text x="1130" y="478" fill="#fdf4ff" font-size="18" font-weight="720" text-anchor="middle">history</text>
+        <text x="1130" y="503" fill="#f5d0fe" font-size="13" text-anchor="middle">prior relations</text>
+      </g>
+
+      <g transform="translate(1350 0)">
+        <rect width="360" height="560" rx="28" fill="#101e31" stroke="#34475d" stroke-width="2"/>
+        <text x="28" y="48" fill="#f8fafc" font-size="23" font-weight="740">Coverage at cutoff cᵢ</text>
+        <text x="28" y="79" fill="#9fb2c8" font-size="15">The same d applies to every frame.</text>
+
+        <g transform="translate(28 112)">
+          <rect width="304" height="72" rx="15" fill="#0d3746" stroke="#22d3ee"/>
+          <text x="20" y="29" fill="#cffafe" font-size="16" font-weight="720">d = 0</text>
+          <text x="20" y="53" fill="#b8cbd8" font-size="14">root attributes only</text>
+          <rect y="87" width="304" height="72" rx="15" fill="#142d49" stroke="#60a5fa"/>
+          <text x="20" y="116" fill="#dbeafe" font-size="16" font-weight="720">d = 1</text>
+          <text x="20" y="140" fill="#b8cbd8" font-size="14">+ immediate relations</text>
+          <rect y="174" width="304" height="72" rx="15" fill="#29264b" stroke="#a78bfa"/>
+          <text x="20" y="203" fill="#ede9fe" font-size="16" font-weight="720">d = 2</text>
+          <text x="20" y="227" fill="#b8cbd8" font-size="14">+ relations of relations</text>
+          <rect y="261" width="304" height="72" rx="15" fill="#38243f" stroke="#d8b4fe"/>
+          <text x="20" y="290" fill="#fae8ff" font-size="16" font-weight="720">d = 3</text>
+          <text x="20" y="314" fill="#b8cbd8" font-size="14">+ deeper relational context</text>
+        </g>
+
+        <line x1="28" y1="475" x2="332" y2="475" stroke="#34475d"/>
+        <text x="28" y="509" fill="#7dd3fc" font-size="14" font-weight="720">TRADE-OFF</text>
+        <text x="28" y="534" fill="#b8cbd8" font-size="14">more signal ↔ more SQL, width, memory</text>
+      </g>
+    </g>
+
+    <g transform="translate(70 760)">
+      <path d="M0 0 H1315" stroke="#7dd3fc" stroke-width="3" marker-end="url(#arrow)"/>
+      <text x="657" y="36" fill="#b8cbd8" font-size="15" text-anchor="middle">Increasing d enlarges Vd = {tables within d foreign-key hops of the prediction entity}.</text>
+    </g>
+  </g>
+</svg>

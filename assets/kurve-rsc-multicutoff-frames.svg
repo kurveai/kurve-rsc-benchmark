@@ -1,0 +1,196 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1040" viewBox="0 0 1800 1040" role="img" aria-labelledby="title desc">
+  <title id="title">Kurve RSC multi-cutoff frame generation</title>
+  <desc id="desc">A relational schema is instantiated at K different cutoffs. Each GraphReduce computation emits an entity-grain table. Those tables form one logical training matrix that can fit, condition, or fine-tune any downstream learner, including tabular foundation models such as TabPFN.</desc>
+
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#071322"/>
+      <stop offset="1" stop-color="#111b31"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#142a48"/>
+      <stop offset="1" stop-color="#101e35"/>
+    </linearGradient>
+    <linearGradient id="model" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#173d36"/>
+      <stop offset="1" stop-color="#102b2b"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#000814" flood-opacity="0.4"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="10" markerHeight="10" orient="auto">
+      <path d="M1 1 L11 6 L1 11 Z" fill="#7dd3fc"/>
+    </marker>
+    <marker id="arrowGreen" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="10" markerHeight="10" orient="auto">
+      <path d="M1 1 L11 6 L1 11 Z" fill="#6ee7b7"/>
+    </marker>
+  </defs>
+
+  <rect width="1800" height="1040" fill="url(#bg)"/>
+  <circle cx="1500" cy="80" r="300" fill="#2563eb" opacity="0.055"/>
+  <circle cx="190" cy="940" r="320" fill="#14b8a6" opacity="0.04"/>
+
+  <g font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+    <text x="70" y="72" fill="#f8fafc" font-size="42" font-weight="760">One relational graph, many point-in-time frames</text>
+    <text x="70" y="112" fill="#a9bdd2" font-size="20">Kurve RSC repeats the same leakage-safe computation at a configurable schedule of cutoffs.</text>
+
+    <g transform="translate(70 142)">
+      <rect width="205" height="42" rx="21" fill="#143c63" stroke="#38bdf8"/>
+      <text x="102.5" y="28" fill="#dbeafe" font-size="16" font-weight="700" text-anchor="middle">K cutoff frames</text>
+      <rect x="220" width="230" height="42" rx="21" fill="#392b63" stroke="#a78bfa"/>
+      <text x="335" y="28" fill="#ede9fe" font-size="16" font-weight="700" text-anchor="middle">depth d table hops</text>
+      <text x="470" y="27" fill="#8fa5bd" font-size="15">independent top-level controls</text>
+    </g>
+
+    <!-- Schema graph -->
+    <g transform="translate(70 230)" filter="url(#shadow)">
+      <rect width="330" height="555" rx="28" fill="url(#panel)" stroke="#365774" stroke-width="2"/>
+      <rect x="24" y="24" width="151" height="30" rx="15" fill="#1b4d76"/>
+      <text x="99.5" y="45" fill="#dbeafe" font-size="14" font-weight="750" text-anchor="middle" letter-spacing="0.8">RELATIONAL INPUT</text>
+      <text x="24" y="93" fill="#f8fafc" font-size="25" font-weight="720">Schema graph</text>
+      <text x="24" y="121" fill="#9fb2c8" font-size="15">Tables are nodes; foreign keys are edges.</text>
+
+      <g transform="translate(24 158)">
+        <path d="M139 63 C96 93 71 114 63 153" fill="none" stroke="#5b8db5" stroke-width="3"/>
+        <path d="M163 63 C203 93 235 116 247 153" fill="none" stroke="#5b8db5" stroke-width="3"/>
+        <path d="M63 209 C63 245 63 269 63 301" fill="none" stroke="#8067b9" stroke-width="3"/>
+        <path d="M247 209 C247 245 247 269 247 301" fill="none" stroke="#8067b9" stroke-width="3"/>
+
+        <rect x="92" width="130" height="64" rx="14" fill="#123c59" stroke="#38bdf8" stroke-width="2"/>
+        <text x="157" y="27" fill="#dff6ff" font-size="15" font-weight="720" text-anchor="middle">entity table</text>
+        <text x="157" y="49" fill="#8edcf6" font-size="12" text-anchor="middle">prediction grain</text>
+
+        <rect x="0" y="153" width="126" height="56" rx="13" fill="#172f49" stroke="#60a5fa"/>
+        <text x="63" y="187" fill="#dbeafe" font-size="15" font-weight="680" text-anchor="middle">events</text>
+        <rect x="184" y="153" width="126" height="56" rx="13" fill="#172f49" stroke="#60a5fa"/>
+        <text x="247" y="187" fill="#dbeafe" font-size="15" font-weight="680" text-anchor="middle">relations</text>
+
+        <rect x="0" y="301" width="126" height="56" rx="13" fill="#262343" stroke="#a78bfa"/>
+        <text x="63" y="335" fill="#ede9fe" font-size="15" font-weight="680" text-anchor="middle">details</text>
+        <rect x="184" y="301" width="126" height="56" rx="13" fill="#262343" stroke="#a78bfa"/>
+        <text x="247" y="335" fill="#ede9fe" font-size="15" font-weight="680" text-anchor="middle">context</text>
+      </g>
+
+      <g transform="translate(24 478)">
+        <circle cx="7" cy="7" r="5" fill="#38bdf8"/>
+        <text x="22" y="12" fill="#bfd0df" font-size="14">same keys and operations</text>
+        <circle cx="7" cy="36" r="5" fill="#a78bfa"/>
+        <text x="22" y="41" fill="#bfd0df" font-size="14">visibility changes by cutoff</text>
+      </g>
+    </g>
+
+    <!-- Repeat bracket / arrows -->
+    <path d="M422 506 C455 506 465 506 495 506" fill="none" stroke="#7dd3fc" stroke-width="4" marker-end="url(#arrow)"/>
+    <text x="459" y="480" fill="#7dd3fc" font-size="14" font-weight="720" text-anchor="middle">RUN K TIMES</text>
+
+    <!-- Cutoff frame cards -->
+    <g transform="translate(510 224)">
+      <g filter="url(#shadow)">
+        <rect width="460" height="196" rx="22" fill="#11263f" stroke="#38bdf8" stroke-width="2"/>
+        <rect width="460" height="48" rx="22" fill="#16486c"/>
+        <rect y="24" width="460" height="24" fill="#16486c"/>
+        <text x="24" y="31" fill="#e0f2fe" font-size="17" font-weight="740">GraphReduce instance G(c₁, d)</text>
+        <text x="424" y="31" fill="#bae6fd" font-size="15" text-anchor="end">early</text>
+        <g transform="translate(20 68)" font-size="13">
+          <rect width="420" height="105" rx="9" fill="#0d1e32" stroke="#31516e"/>
+          <path d="M0 31 H420 M0 68 H420 M92 0 V105 M202 0 V105 M306 0 V105" stroke="#31516e"/>
+          <text x="46" y="21" fill="#91d9f5" text-anchor="middle">entity</text>
+          <text x="147" y="21" fill="#91d9f5" text-anchor="middle">cutoff</text>
+          <text x="254" y="21" fill="#91d9f5" text-anchor="middle">features</text>
+          <text x="363" y="21" fill="#91d9f5" text-anchor="middle">target</text>
+          <text x="46" y="54" fill="#d7e4ef" text-anchor="middle">A</text><text x="147" y="54" fill="#d7e4ef" text-anchor="middle">c₁</text><text x="254" y="54" fill="#d7e4ef" text-anchor="middle">x₁…xₚ</text><text x="363" y="54" fill="#6ee7b7" text-anchor="middle">y₁</text>
+          <text x="46" y="91" fill="#d7e4ef" text-anchor="middle">B</text><text x="147" y="91" fill="#d7e4ef" text-anchor="middle">c₁</text><text x="254" y="91" fill="#d7e4ef" text-anchor="middle">x₁…xₚ</text><text x="363" y="91" fill="#6ee7b7" text-anchor="middle">y₁</text>
+        </g>
+      </g>
+
+      <g transform="translate(0 224)" filter="url(#shadow)">
+        <rect width="460" height="196" rx="22" fill="#11263f" stroke="#38bdf8" stroke-width="2"/>
+        <rect width="460" height="48" rx="22" fill="#16486c"/>
+        <rect y="24" width="460" height="24" fill="#16486c"/>
+        <text x="24" y="31" fill="#e0f2fe" font-size="17" font-weight="740">GraphReduce instance G(c₂, d)</text>
+        <text x="424" y="31" fill="#bae6fd" font-size="15" text-anchor="end">later</text>
+        <g transform="translate(20 68)" font-size="13">
+          <rect width="420" height="105" rx="9" fill="#0d1e32" stroke="#31516e"/>
+          <path d="M0 31 H420 M0 68 H420 M92 0 V105 M202 0 V105 M306 0 V105" stroke="#31516e"/>
+          <text x="46" y="21" fill="#91d9f5" text-anchor="middle">entity</text><text x="147" y="21" fill="#91d9f5" text-anchor="middle">cutoff</text><text x="254" y="21" fill="#91d9f5" text-anchor="middle">features</text><text x="363" y="21" fill="#91d9f5" text-anchor="middle">target</text>
+          <text x="46" y="54" fill="#d7e4ef" text-anchor="middle">A</text><text x="147" y="54" fill="#d7e4ef" text-anchor="middle">c₂</text><text x="254" y="54" fill="#d7e4ef" text-anchor="middle">x₁…xₚ</text><text x="363" y="54" fill="#6ee7b7" text-anchor="middle">y₂</text>
+          <text x="46" y="91" fill="#d7e4ef" text-anchor="middle">C</text><text x="147" y="91" fill="#d7e4ef" text-anchor="middle">c₂</text><text x="254" y="91" fill="#d7e4ef" text-anchor="middle">x₁…xₚ</text><text x="363" y="91" fill="#6ee7b7" text-anchor="middle">y₂</text>
+        </g>
+      </g>
+
+      <text x="230" y="455" fill="#8fa5bd" font-size="30" font-weight="700" text-anchor="middle">⋮</text>
+
+      <g transform="translate(0 478)" filter="url(#shadow)">
+        <rect width="460" height="196" rx="22" fill="#11263f" stroke="#38bdf8" stroke-width="2"/>
+        <rect width="460" height="48" rx="22" fill="#16486c"/>
+        <rect y="24" width="460" height="24" fill="#16486c"/>
+        <text x="24" y="31" fill="#e0f2fe" font-size="17" font-weight="740">GraphReduce instance G(cₖ, d)</text>
+        <text x="424" y="31" fill="#bae6fd" font-size="15" text-anchor="end">latest train</text>
+        <g transform="translate(20 68)" font-size="13">
+          <rect width="420" height="105" rx="9" fill="#0d1e32" stroke="#31516e"/>
+          <path d="M0 31 H420 M0 68 H420 M92 0 V105 M202 0 V105 M306 0 V105" stroke="#31516e"/>
+          <text x="46" y="21" fill="#91d9f5" text-anchor="middle">entity</text><text x="147" y="21" fill="#91d9f5" text-anchor="middle">cutoff</text><text x="254" y="21" fill="#91d9f5" text-anchor="middle">features</text><text x="363" y="21" fill="#91d9f5" text-anchor="middle">target</text>
+          <text x="46" y="54" fill="#d7e4ef" text-anchor="middle">A</text><text x="147" y="54" fill="#d7e4ef" text-anchor="middle">cₖ</text><text x="254" y="54" fill="#d7e4ef" text-anchor="middle">x₁…xₚ</text><text x="363" y="54" fill="#6ee7b7" text-anchor="middle">yₖ</text>
+          <text x="46" y="91" fill="#d7e4ef" text-anchor="middle">D</text><text x="147" y="91" fill="#d7e4ef" text-anchor="middle">cₖ</text><text x="254" y="91" fill="#d7e4ef" text-anchor="middle">x₁…xₚ</text><text x="363" y="91" fill="#6ee7b7" text-anchor="middle">yₖ</text>
+        </g>
+      </g>
+    </g>
+
+    <path d="M991 506 C1025 506 1034 506 1065 506" fill="none" stroke="#7dd3fc" stroke-width="4" marker-end="url(#arrow)"/>
+    <text x="1027" y="480" fill="#7dd3fc" font-size="14" font-weight="720" text-anchor="middle">UNION</text>
+
+    <!-- Unified frame -->
+    <g transform="translate(1080 292)" filter="url(#shadow)">
+      <rect width="400" height="430" rx="26" fill="#15263d" stroke="#a78bfa" stroke-width="2"/>
+      <rect width="400" height="59" rx="26" fill="#392d65"/>
+      <rect y="30" width="400" height="29" fill="#392d65"/>
+      <text x="200" y="37" fill="#ede9fe" font-size="19" font-weight="750" text-anchor="middle">Logical training matrix</text>
+      <g transform="translate(22 84)" font-size="13">
+        <rect width="356" height="285" rx="8" fill="#0e1e31" stroke="#4d4771"/>
+        <path d="M0 34 H356 M0 79 H356 M0 124 H356 M0 169 H356 M0 214 H356 M0 259 H356 M74 0 V285 M166 0 V285 M267 0 V285" stroke="#3d4962"/>
+        <rect y="34" width="356" height="90" fill="#0e3950" opacity="0.34"/>
+        <rect y="124" width="356" height="45" fill="#29435d" opacity="0.4"/>
+        <rect y="169" width="356" height="90" fill="#362c59" opacity="0.42"/>
+        <text x="37" y="23" fill="#c4b5fd" text-anchor="middle">entity</text><text x="120" y="23" fill="#c4b5fd" text-anchor="middle">cutoff</text><text x="216" y="23" fill="#c4b5fd" text-anchor="middle">x₁…xₚ</text><text x="311" y="23" fill="#c4b5fd" text-anchor="middle">target</text>
+        <text x="37" y="62" fill="#d7e4ef" text-anchor="middle">A</text><text x="120" y="62" fill="#9bdcf5" text-anchor="middle">c₁</text><text x="216" y="62" fill="#d7e4ef" text-anchor="middle">…</text><text x="311" y="62" fill="#6ee7b7" text-anchor="middle">y₁</text>
+        <text x="37" y="107" fill="#d7e4ef" text-anchor="middle">B</text><text x="120" y="107" fill="#9bdcf5" text-anchor="middle">c₁</text><text x="216" y="107" fill="#d7e4ef" text-anchor="middle">…</text><text x="311" y="107" fill="#6ee7b7" text-anchor="middle">y₁</text>
+        <text x="37" y="152" fill="#d7e4ef" text-anchor="middle">A</text><text x="120" y="152" fill="#9bdcf5" text-anchor="middle">c₂</text><text x="216" y="152" fill="#d7e4ef" text-anchor="middle">…</text><text x="311" y="152" fill="#6ee7b7" text-anchor="middle">y₂</text>
+        <text x="37" y="197" fill="#d7e4ef" text-anchor="middle">A</text><text x="120" y="197" fill="#c4b5fd" text-anchor="middle">cₖ</text><text x="216" y="197" fill="#d7e4ef" text-anchor="middle">…</text><text x="311" y="197" fill="#6ee7b7" text-anchor="middle">yₖ</text>
+        <text x="37" y="242" fill="#d7e4ef" text-anchor="middle">D</text><text x="120" y="242" fill="#c4b5fd" text-anchor="middle">cₖ</text><text x="216" y="242" fill="#d7e4ef" text-anchor="middle">…</text><text x="311" y="242" fill="#6ee7b7" text-anchor="middle">yₖ</text>
+        <text x="178" y="278" fill="#8298af" text-anchor="middle">⋮ aligned cutoff frames ⋮</text>
+      </g>
+      <text x="200" y="399" fill="#b8c8d8" font-size="14" text-anchor="middle">logical concatenation F₁ ⊕ F₂ ⊕ … ⊕ Fₖ</text>
+    </g>
+
+    <path d="M1498 506 C1508 506 1514 506 1524 506" fill="none" stroke="#6ee7b7" stroke-width="4" marker-end="url(#arrowGreen)"/>
+
+    <!-- Learner interoperability -->
+    <g transform="translate(1538 342)" filter="url(#shadow)">
+      <rect width="214" height="328" rx="25" fill="url(#model)" stroke="#34d399" stroke-width="2"/>
+      <circle cx="107" cy="48" r="25" fill="#174d43" stroke="#6ee7b7"/>
+      <path d="M91 55 L102 44 L111 52 L125 35" fill="none" stroke="#a7f3d0" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="107" y="93" fill="#a7f3d0" font-size="12" font-weight="760" text-anchor="middle" letter-spacing="0.8">ANY DOWNSTREAM</text>
+      <text x="107" y="119" fill="#ecfdf5" font-size="20" font-weight="750" text-anchor="middle">learner</text>
+
+      <rect x="20" y="139" width="174" height="58" rx="13" fill="#17483f" stroke="#6ee7b7"/>
+      <text x="107" y="160" fill="#a7f3d0" font-size="10.5" font-weight="760" text-anchor="middle" letter-spacing="0.65">TABULAR FOUNDATION MODEL</text>
+      <text x="107" y="185" fill="#ecfdf5" font-size="18" font-weight="780" text-anchor="middle">TabPFN</text>
+
+      <line x1="25" y1="216" x2="189" y2="216" stroke="#2c655d"/>
+      <text x="107" y="242" fill="#c7ddd8" font-size="13" text-anchor="middle">GBDT · CatBoost</text>
+      <text x="107" y="265" fill="#c7ddd8" font-size="12" text-anchor="middle">neural · linear · AutoML</text>
+      <text x="107" y="294" fill="#6ee7b7" font-size="12.5" font-weight="700" text-anchor="middle">fit · condition · fine-tune</text>
+      <text x="107" y="316" fill="#8fdcc5" font-size="11.5" text-anchor="middle">official evaluation</text>
+    </g>
+
+    <!-- Footer -->
+    <g transform="translate(70 900)">
+      <rect width="1682" height="88" rx="22" fill="#0e1c2d" stroke="#2d4057"/>
+      <text x="30" y="34" fill="#7dd3fc" font-size="15" font-weight="760">POINT-IN-TIME CONTRACT</text>
+      <text x="30" y="61" fill="#b7c7d7" font-size="15">Frame Fᵢ may use only source rows visible at cᵢ; its target comes from the task-defined future label window.</text>
+      <line x1="980" y1="20" x2="980" y2="68" stroke="#30445b"/>
+      <text x="1015" y="34" fill="#a78bfa" font-size="15" font-weight="760">PHYSICAL EXECUTION</text>
+      <text x="1015" y="61" fill="#b7c7d7" font-size="15">Materialize jointly or stream frame parts incrementally.</text>
+    </g>
+  </g>
+</svg>
