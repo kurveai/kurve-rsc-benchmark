@@ -544,9 +544,22 @@ The run used CatBoost, multiple official training cutoffs
 RelBench evaluators. Most runners used the full available training schedule;
 the two Stack classification runners used the reproducible 15-frame policy
 described in Exhibit A. All 12 tasks completed and produced validated
-submission files. The Kurve RSC column below reports test AUROC from that
-August 25, 2026 run. Its validation macro-average was 0.7997 and its test
-macro-average was 0.8020.
+submission files. The **configured** Kurve RSC column below reports test AUROC
+from that August 25, 2026 run. Its validation macro-average was 0.7997 and its
+test macro-average was 0.8020.
+
+The adjacent **base-only** column is a feature-family ablation run under the
+same task harness. It applies the top-level `--baseline` override, restricting
+every graph node to GraphReduce's `base` feature family while retaining each
+task's graph topology, depth, cutoff schedule, source columns, feature budgets,
+and downstream fitting procedure. All 12 tasks passed and the test
+macro-average was 0.7904. We use “base-only” rather than “baseline” in the
+table because relational-learning papers use *baseline* for competing systems
+such as TabPFN-Rel [10]; the parenthetical modifier follows the usual practice
+of naming an ablated system variant by the component retained or removed.
+Both Kurve RSC variants fit CatBoost separately on each task's labeled training
+data. Neither variant is an in-context-learning result in the RDBLearn sense
+[11].
 
 For external context, the remaining columns reproduce the selected
 configuration's test AUROC from Appendix D, Table 4 of the August 2026
@@ -556,29 +569,43 @@ pipeline described in [11]; RelGNN and RelGT are the RelArena-$\alpha$
 reproductions selected on validation performance. The final row is the
 unweighted arithmetic mean across the same 12 classification tasks.
 
-| Task | Kurve RSC | TabPFN-Rel | RDBLearn | RelGNN | RelGT |
-|---|---:|---:|---:|---:|---:|
-| `amazon/item-churn` | 0.8130 | 0.8280 | 0.8195 | 0.7856 | 0.8238 |
-| `amazon/user-churn` | 0.6921 | 0.7086 | 0.6844 | 0.6943 | 0.7019 |
-| `avito/user-clicks` | 0.7878 | 0.6752 | 0.6788 | 0.6676 | 0.6444 |
-| `avito/user-visits` | 0.8296 | 0.6680 | 0.6596 | 0.6487 | 0.6621 |
-| `event/user-ignore` | 0.8106 | 0.8787 | 0.6644 | 0.8054 | 0.7815 |
-| `event/user-repeat` | 0.7750 | 0.7593 | 0.7441 | 0.7546 | 0.7344 |
-| `f1/driver-dnf` | 0.8183 | 0.7322 | 0.7146 | 0.7261 | 0.7117 |
-| `f1/driver-top3` | 0.9148 | 0.7714 | 0.7801 | 0.7589 | 0.8108 |
-| `hm/user-churn` | 0.6944 | 0.7052 | 0.6984 | 0.6820 | 0.6895 |
-| `stack/user-badge` | 0.8570 | 0.8804 | 0.7711 | 0.6206 | 0.5743 |
-| `stack/user-engagement` | 0.8969 | 0.9060 | 0.8587 | 0.9051 | 0.9067 |
-| `trial/study-outcome` | 0.7340 | 0.7647 | 0.7212 | 0.6574 | 0.6685 |
-| **Unweighted mean** | **0.8020** | **0.7731** | **0.7329** | **0.7255** | **0.7258** |
+\begingroup
+\small
 
-These columns are not a controlled re-run inside one harness. Kurve RSC and
-the four RelArena-$\alpha$ baselines share the official task names and metrics,
-but may differ in package revision, database state, tuning budget, timestamp
-boundary treatment, and execution protocol. RelArena-$\alpha$ itself documents
-why such differences can materially affect relational benchmark comparisons
-[10]. The table should therefore be read as transparent cross-system context,
-not as an isolated architecture ablation.
+| Task | Kurve RSC (configured) | Kurve RSC (base-only) | TabPFN-Rel | RDBLearn | RelGNN | RelGT |
+|---|---:|---:|---:|---:|---:|---:|
+| `amazon/item-churn` | 0.8130 | 0.8131 | 0.8280 | 0.8195 | 0.7856 | 0.8238 |
+| `amazon/user-churn` | 0.6921 | 0.6924 | 0.7086 | 0.6844 | 0.6943 | 0.7019 |
+| `avito/user-clicks` | 0.7878 | 0.7848 | 0.6752 | 0.6788 | 0.6676 | 0.6444 |
+| `avito/user-visits` | 0.8296 | 0.8289 | 0.6680 | 0.6596 | 0.6487 | 0.6621 |
+| `event/user-ignore` | 0.8106 | 0.8273 | 0.8787 | 0.6644 | 0.8054 | 0.7815 |
+| `event/user-repeat` | 0.7750 | 0.7696 | 0.7593 | 0.7441 | 0.7546 | 0.7344 |
+| `f1/driver-dnf` | 0.8183 | 0.7462 | 0.7322 | 0.7146 | 0.7261 | 0.7117 |
+| `f1/driver-top3` | 0.9148 | 0.8350 | 0.7714 | 0.7801 | 0.7589 | 0.8108 |
+| `hm/user-churn` | 0.6944 | 0.6939 | 0.7052 | 0.6984 | 0.6820 | 0.6895 |
+| `stack/user-badge` | 0.8570 | 0.8585 | 0.8804 | 0.7711 | 0.6206 | 0.5743 |
+| `stack/user-engagement` | 0.8969 | 0.8965 | 0.9060 | 0.8587 | 0.9051 | 0.9067 |
+| `trial/study-outcome` | 0.7340 | 0.7384 | 0.7647 | 0.7212 | 0.6574 | 0.6685 |
+| **Unweighted mean** | **0.8020** | **0.7904** | **0.7731** | **0.7329** | **0.7255** | **0.7258** |
+
+\endgroup
+
+Configured Kurve RSC improves the classification macro-average by 0.0116
+AUROC over the base-only ablation, but the effect is not uniform. The largest
+gains occur on `f1/driver-dnf` and `f1/driver-top3`; base-only is slightly
+better on several tasks and materially better on `event/user-ignore`. The
+paired columns therefore support an aggregate claim about the configured
+feature-family program, not a claim that every additional family helps every
+task.
+
+The two Kurve RSC columns form the within-harness feature-family ablation. The
+comparison between either Kurve RSC column and the four RelArena-$\alpha$
+systems is not a controlled re-run inside one harness. They share the official
+task names and metrics, but may differ in package revision, database state,
+tuning budget, timestamp-boundary treatment, and execution protocol.
+RelArena-$\alpha$ itself documents why such differences can materially affect
+relational benchmark comparisons [10]. The external columns should therefore
+be read as transparent cross-system context.
 
 The Kurve RSC result is also a **system** result rather than a claim that one
 task-blind configuration produced every row. The non-Trial runners in this
@@ -1438,6 +1465,12 @@ Stack runner used at most 15 reproducibly stratified training cutoffs with seed
 42 and always retained the latest training cutoff. Validation and test frames
 used the official task timestamps; submission mode expanded test coverage to
 all official test keys.
+
+The base-only classification ablation used the same run profile with
+`KURVE_RSC_BASELINE_FEATURE_FAMILY=1`. This final policy override set every
+node's `feature_families` tuple to `("base",)` after task-specific configuration
+was applied. It did not replace task graphs, node columns, depth, timestamp
+selection, model configuration, or validation logic.
 
 All problem-specific rows below still consume official RelBench tables and
 task contracts. **P** identifies implementation choices beyond top-level $K$,
