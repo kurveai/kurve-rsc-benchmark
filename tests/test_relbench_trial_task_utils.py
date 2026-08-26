@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 from relbench.base import Database, Table
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "kurve_rsc"))
@@ -16,8 +18,12 @@ from kurve_rsc import (
 from kurve_rsc.trial_builder import (
     _feature_cutoff,
     _schema_tree_edges,
+    configure_generic_trial_feature_families,
+    generic_trial_feature_hops,
     prepare_generic_model_inputs,
     select_generic_model_features,
+    trial_auto_annotate_active,
+    trial_auto_annotate_enabled,
 )
 
 
@@ -97,6 +103,61 @@ def test_generic_model_features_and_categorical_layout_are_shared() -> None:
     assert replayed_indices == [0]
     assert train_inputs["country"].tolist() == ["US", "__missing__"]
     assert test_inputs["country"].tolist() == ["__missing__", "CA"]
+
+
+def test_generic_trial_nodes_enable_all_feature_families(monkeypatch) -> None:
+    monkeypatch.delenv("KURVE_RSC_BASELINE_FEATURE_FAMILY", raising=False)
+    nodes = [SimpleNamespace(), SimpleNamespace()]
+
+    configure_generic_trial_feature_families(nodes)
+
+    expected = (
+        "base",
+        "semantic",
+        "conditional",
+        "temporal",
+        "sequence",
+        "episode",
+        "context",
+    )
+    assert all(node.feature_families == expected for node in nodes)
+
+
+def test_generic_trial_baseline_mode_overrides_all_families(monkeypatch) -> None:
+    monkeypatch.setenv("KURVE_RSC_BASELINE_FEATURE_FAMILY", "1")
+    nodes = [SimpleNamespace()]
+
+    configure_generic_trial_feature_families(nodes)
+
+    assert nodes[0].feature_families == ("base",)
+
+
+def test_generic_trial_feature_hops_are_configurable(monkeypatch) -> None:
+    monkeypatch.delenv("KURVE_RSC_TRIAL_FEATURE_HOPS", raising=False)
+    assert generic_trial_feature_hops() == 3
+
+    monkeypatch.setenv("KURVE_RSC_TRIAL_FEATURE_HOPS", "2")
+    assert generic_trial_feature_hops() == 2
+
+    monkeypatch.setenv("KURVE_RSC_TRIAL_FEATURE_HOPS", "0")
+    with pytest.raises(ValueError, match="positive integer"):
+        generic_trial_feature_hops()
+
+
+def test_trial_annotation_experiments_are_configurable(monkeypatch) -> None:
+    monkeypatch.delenv("KURVE_RSC_BASELINE_FEATURE_FAMILY", raising=False)
+    monkeypatch.delenv("KURVE_RSC_TRIAL_AUTO_ANNOTATE", raising=False)
+    assert trial_auto_annotate_enabled()
+    assert trial_auto_annotate_active()
+
+    monkeypatch.setenv("KURVE_RSC_TRIAL_AUTO_ANNOTATE", "0")
+    assert not trial_auto_annotate_enabled()
+    assert not trial_auto_annotate_active()
+
+    monkeypatch.setenv("KURVE_RSC_TRIAL_AUTO_ANNOTATE", "1")
+    monkeypatch.setenv("KURVE_RSC_BASELINE_FEATURE_FAMILY", "1")
+    assert trial_auto_annotate_enabled()
+    assert not trial_auto_annotate_active()
 
 
 def test_all_trial_entry_points_use_the_same_generic_runner(monkeypatch) -> None:

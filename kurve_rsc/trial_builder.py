@@ -9,9 +9,11 @@ and evaluator.
 
 from __future__ import annotations
 
+import os
 import re
 from collections import deque
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Iterator, Sequence
 
 import duckdb
@@ -25,6 +27,7 @@ from graphreduce.node import DuckdbNode
 
 try:
     from .relbench_catboost_utils import (
+        enable_all_feature_families,
         fit_tuned_classifier_incremental,
         fit_tuned_regressor_incremental,
         selected_model_backend,
@@ -38,9 +41,13 @@ try:
         target_table_from_frame,
     )
     from .relbench_regression_metrics import add_nmae
-    from .relbench_feature_policy import apply_feature_family_policy
+    from .relbench_feature_policy import (
+        apply_feature_family_policy,
+        baseline_feature_family_enabled,
+    )
 except ImportError:  # Direct execution with ``kurve_rsc`` on sys.path.
     from relbench_catboost_utils import (
+        enable_all_feature_families,
         fit_tuned_classifier_incremental,
         fit_tuned_regressor_incremental,
         selected_model_backend,
@@ -54,10 +61,15 @@ except ImportError:  # Direct execution with ``kurve_rsc`` on sys.path.
         target_table_from_frame,
     )
     from relbench_regression_metrics import add_nmae
-    from relbench_feature_policy import apply_feature_family_policy
+    from relbench_feature_policy import (
+        apply_feature_family_policy,
+        baseline_feature_family_enabled,
+    )
 
 
 DATASET_NAME = "rel-trial"
+TRIAL_FEATURE_HOPS_ENV = "KURVE_RSC_TRIAL_FEATURE_HOPS"
+TRIAL_AUTO_ANNOTATE_ENV = "KURVE_RSC_TRIAL_AUTO_ANNOTATE"
 _IDENTIFIER_PATTERN = re.compile(r"[^0-9A-Za-z_]+")
 
 
@@ -91,6 +103,47 @@ def _database_lookback_days(db: object, cutoff: pd.Timestamp) -> int:
     if not starts:
         return 1
     return max(1, int((pd.Timestamp(cutoff) - min(starts)).days) + 1)
+
+
+def configure_generic_trial_feature_families(
+    nodes: Sequence[DuckdbNode],
+) -> None:
+    """Enable every feature family, then apply the optional baseline override."""
+
+    enable_all_feature_families(nodes)
+    apply_feature_family_policy(nodes)
+
+
+def generic_trial_feature_hops(default: int = 3) -> int:
+    """Return the schema traversal depth used by generic Trial graphs."""
+
+    raw_value = os.environ.get(TRIAL_FEATURE_HOPS_ENV, str(default)).strip()
+    try:
+        hops = int(raw_value)
+    except ValueError as exc:
+        raise ValueError(f"{TRIAL_FEATURE_HOPS_ENV} must be a positive integer") from exc
+    if hops < 1:
+        raise ValueError(f"{TRIAL_FEATURE_HOPS_ENV} must be a positive integer")
+    return hops
+
+
+def _trial_env_flag(name: str, default: bool) -> bool:
+    raw_value = os.environ.get(name, "1" if default else "0").strip().lower()
+    if raw_value in {"1", "true", "yes", "on"}:
+        return True
+    if raw_value in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean value")
+
+
+def trial_auto_annotate_enabled(default: bool = True) -> bool:
+    return _trial_env_flag(TRIAL_AUTO_ANNOTATE_ENV, default)
+
+
+def trial_auto_annotate_active() -> bool:
+    """Return whether annotations belong in the active feature-family mode."""
+
+    return trial_auto_annotate_enabled() and not baseline_feature_family_enabled()
 
 
 def _schema_tree_edges(
@@ -200,6 +253,16 @@ def build_generic_trial_features(
             date_key=table.time_col,
             columns=table.df.columns.tolist(),
             do_filters_ops=filters,
+            auto_annotate_features=trial_auto_annotate_active(),
+            # Trial contains many unique names and long descriptions. Generic
+            # text-shape annotations add width without domain meaning, while
+            # bounded categorical indicators complement the predicates above.
+            auto_text_features=False,
+            auto_annotate_max_categorical_columns=8,
+            auto_annotate_max_gated_numeric_cols=0,
+            auto_annotate_gated_numeric_top_k=0,
+            categorical_cardinality_threshold=12,
+            categorical_top_k=5,
         )
 
     root = nodes[entity_table]
@@ -217,11 +280,11 @@ def build_generic_trial_features(
         auto_features=True,
         auto_labels=False,
         date_filters_on_agg=True,
-        auto_feature_hops_back=1,
+        auto_feature_hops_back=generic_trial_feature_hops(),
         auto_feature_hops_front=0,
         use_temp_tables=True,
     )
-    apply_feature_family_policy(nodes.values())
+    configure_generic_trial_feature_families(list(nodes.values()))
     for node in nodes.values():
         graph.add_node(node)
 
@@ -393,26 +456,36 @@ def run_generic_rel_trial_task(
     """Run a RelBench Trial task without any task-specific feature behavior."""
 
     del data_dir  # RelBench owns dataset retrieval and caching.
+    print("trial_feature_hops:", generic_trial_feature_hops(), flush=True)
+    print("trial_auto_annotate:", trial_auto_annotate_active(), flush=True)
     _, db = get_relbench_dataset_db(
         DATASET_NAME,
         download=True,
         upto_test_timestamp=False,
     )
-    con = duckdb.connect()
     split_tasks: dict[str, object] = {}
     split_stores: dict[str, RelBenchFrameStore] = {}
-    try:
-        register_relbench_db_views(
-            con,
-            db,
-            {table_name: _view_name(table_name) for table_name in db.table_dict},
-        )
-        for split in ("train", "val", "test"):
-            task, store = _build_split(con, db, task_name, split)
-            split_tasks[split] = task
-            split_stores[split] = store
-    finally:
-        con.close()
+    with TemporaryDirectory(prefix=f"kurve-{_sql_name(task_name)}-duckdb-") as temp_dir:
+        con = duckdb.connect()
+        try:
+            # DuckDB otherwise spills every concurrently running task into the
+            # same relative ``.tmp`` directory.  Deep Trial graphs can spill
+            # heavily, so shared files make parallel tasks corrupt one another.
+            con.execute("SET temp_directory = ?", [temp_dir])
+            register_relbench_db_views(
+                con,
+                db,
+                {
+                    table_name: _view_name(table_name)
+                    for table_name in db.table_dict
+                },
+            )
+            for split in ("train", "val", "test"):
+                task, store = _build_split(con, db, task_name, split)
+                split_tasks[split] = task
+                split_stores[split] = store
+        finally:
+            con.close()
 
     train_store = split_stores["train"]
     validation = split_stores["val"].to_dataframe()
