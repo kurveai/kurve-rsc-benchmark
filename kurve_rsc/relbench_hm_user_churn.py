@@ -41,6 +41,7 @@ TEST_CUT_DATE = datetime.datetime(2020, 9, 14)
 CUT_DATE = TEST_CUT_DATE
 LABEL_DAYS = 7
 LOOKBACK_DAYS = (TEST_CUT_DATE - LOOKBACK_START).days
+HM_TRAIN_FRAME_LIMIT = 15
 
 
 def run_rel_hm_user_churn(
@@ -101,6 +102,7 @@ def run_rel_hm_user_churn(
                 download=True,
                 task=official_task,
                 db=db,
+                max_train_timestamps=HM_TRAIN_FRAME_LIMIT,
             )
             split_tasks[split_name] = task
             split_specs[split_name] = (

@@ -431,6 +431,29 @@ def _task_split_timestamps(task, split: str, db: Database) -> pd.Series:
     return pd.Series(pd.date_range(start=start, end=end, freq=freq))
 
 
+def select_evenly_spaced_timestamps(
+    timestamps: Sequence[FrameItem],
+    limit: int,
+) -> list[FrameItem]:
+    """Select a deterministic, evenly spaced subset including both endpoints."""
+
+    values = list(timestamps)
+    if limit < 1:
+        raise ValueError("timestamp limit must be positive")
+    if len(values) <= limit:
+        return values
+    if limit == 1:
+        return [values[-1]]
+
+    span = len(values) - 1
+    intervals = limit - 1
+    indices = [
+        (sample_index * span + intervals // 2) // intervals
+        for sample_index in range(limit)
+    ]
+    return [values[index] for index in indices]
+
+
 def _make_split_table(
     task,
     split: str,
@@ -482,6 +505,7 @@ def get_relbench_split_task_table(
     task=None,
     db: Database | None = None,
     single_train_period: bool | None = None,
+    max_train_timestamps: int | None = None,
 ) -> tuple[object, Table, list[pd.Timestamp]]:
     """Build an official task table and return its selected timestamps.
 
@@ -489,14 +513,18 @@ def get_relbench_split_task_table(
     window contributes a GraphReduce frame. When ``single_train_period`` is
     true (or ``RELBENCH_SINGLE_TRAIN_PERIOD`` enables it), training uses the
     latest official cutoff: one task-specific label period before validation.
-    ``cache_dir`` is disabled because these examples own the feature-frame
-    lifecycle and should not depend on the global RelBench cache.
+    ``max_train_timestamps`` deterministically samples a bounded, evenly spaced
+    training schedule including its first and latest cutoffs. ``cache_dir`` is
+    disabled because these examples own the feature-frame lifecycle and should
+    not depend on the global RelBench cache.
     """
 
     if task is None:
         task = get_relbench_task(dataset_name, task_name, download=download)
     if db is None:
         db = task.dataset.get_db(upto_test_timestamp=split != "test")
+    if max_train_timestamps is not None and max_train_timestamps < 1:
+        raise ValueError("max_train_timestamps must be positive")
     use_single_period = split == "train" and (
         single_train_period_enabled()
         if single_train_period is None
@@ -507,6 +535,21 @@ def get_relbench_split_task_table(
         if use_single_period
         else None
     )
+    formal_timestamps = _task_split_timestamps(task, split, db)
+    bounded_timestamps: list[pd.Timestamp] | None = None
+    if (
+        split == "train"
+        and not use_single_period
+        and max_train_timestamps is not None
+        and len(formal_timestamps) > max_train_timestamps
+    ):
+        chronological_timestamps = sorted(
+            pd.Timestamp(timestamp) for timestamp in formal_timestamps
+        )
+        bounded_timestamps = select_evenly_spaced_timestamps(
+            chronological_timestamps,
+            max_train_timestamps,
+        )
 
     if db is None:
         original_cache_dir = task.cache_dir
@@ -516,9 +559,11 @@ def get_relbench_split_task_table(
         finally:
             task.cache_dir = original_cache_dir
     else:
-        selected_timestamps = (
-            pd.Series([canonical_timestamp]) if canonical_timestamp is not None else None
-        )
+        selected_timestamps = None
+        if canonical_timestamp is not None:
+            selected_timestamps = pd.Series([canonical_timestamp])
+        elif bounded_timestamps is not None:
+            selected_timestamps = pd.Series(bounded_timestamps)
         table = _make_split_table(task, split, db, selected_timestamps)
         if use_single_period and table.df.empty:
             table = _make_split_table(task, split, db)
@@ -527,7 +572,6 @@ def get_relbench_split_task_table(
     table_timestamps = sorted(
         pd.Timestamp(timestamp) for timestamp in table.df[task.time_col].dropna().unique()
     )
-    formal_timestamps = _task_split_timestamps(task, split, db)
     if not set(table_timestamps).issubset(set(formal_timestamps)):
         raise ValueError(
             f"RelBench {dataset_name}/{task_name} {split} task-table timestamps "
@@ -551,6 +595,14 @@ def get_relbench_split_task_table(
             f"single_train_cut_date: {dataset_name}/{task_name}="
             f"{selected_timestamp.isoformat()} "
             f"(val_timestamp - label_period; {selection})",
+            flush=True,
+        )
+    elif bounded_timestamps is not None:
+        print(
+            "timestamp_sampling: "
+            f"{dataset_name}/{task_name} split=train "
+            f"selected={len(table_timestamps)}/{len(formal_timestamps)} "
+            "strategy=evenly-spaced endpoints=included",
             flush=True,
         )
     return task, table, table_timestamps

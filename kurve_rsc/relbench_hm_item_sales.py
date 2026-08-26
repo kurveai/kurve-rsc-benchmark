@@ -40,6 +40,9 @@ VALIDATION_CUT_DATE = datetime.datetime(2020, 9, 7)
 TEST_CUT_DATE = datetime.datetime(2020, 9, 14)
 HOLDOUT_DATE = TEST_CUT_DATE
 LABEL_DAYS = 7
+HM_TRAIN_FRAME_LIMIT = 15
+
+
 def run_rel_hm_item_sales(
     data_dir: Path | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, float] | None, dict[str, float] | None, int, list[str], str]:
@@ -76,7 +79,12 @@ def run_rel_hm_item_sales(
         split_tasks = {}
         for split_name in ["train", "val", "test"]:
             task, task_table, cut_timestamps = get_relbench_split_task_table(
-                "rel-hm", "item-sales", split_name, download=True, db=db
+                "rel-hm",
+                "item-sales",
+                split_name,
+                download=True,
+                db=db,
+                max_train_timestamps=HM_TRAIN_FRAME_LIMIT,
             )
             split_tasks[split_name] = task
             cut_dates = [timestamp.to_pydatetime() for timestamp in cut_timestamps]
@@ -136,7 +144,9 @@ def run_rel_hm_item_sales(
                 graph._clean_refs()
                 features["timestamp"] = pd.Timestamp(cut_date)
 
-                labels = task_table.df.copy()
+                labels = task_table.df[
+                    task_table.df[task.time_col] == pd.Timestamp(cut_date)
+                ].copy()
 
                 frame = features.merge(
                     labels[[task.time_col, task.entity_col, task.target_col]],

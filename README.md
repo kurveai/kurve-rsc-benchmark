@@ -210,10 +210,12 @@ Use `--training-frame-workers all` to request one worker per training frame.
 Each worker receives its own DuckDB cursor, and source tables are materialized
 where necessary to avoid temporary-table collisions.
 
-The three `rel-stack` tasks use 15 reproducibly selected training cutoffs
-instead of all 46; the most recent training cutoff is always retained.
-Validation and test schedules are not sampled. Long-running Stack tasks emit
-`feature_frame_progress` lines as cutoff frames finish.
+The two `rel-hm` tasks use 15 evenly spaced training cutoffs, including the
+first and latest dates. The three `rel-stack` tasks use 15 reproducibly
+selected training cutoffs instead of all 46; the most recent training cutoff
+is always retained. Validation and test schedules are not sampled.
+Long-running Stack tasks emit `feature_frame_progress` lines as cutoff frames
+finish.
 
 ### Model backends
 
