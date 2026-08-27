@@ -2,7 +2,7 @@
 title: "Kurve RSC"
 subtitle: "Multi-Cutoff Relational Signal Compression, Downstream Learning, and Kurve RSC Feature Families"
 author: "Kurve RSC Technical Report"
-date: "August 25, 2026"
+date: "August 27, 2026"
 lang: en-US
 papersize: letter
 fontsize: 10pt
@@ -613,6 +613,42 @@ classification set contain problem-specific graph, node, feature, or learner
 configuration; several additionally contain explicit semantic or context
 rules. `rel-trial/study-outcome` uses the shared schema-driven generic Trial
 runner. Those distinctions must accompany any leaderboard interpretation.
+
+## RelBench v1 entity regression
+
+Kurve RSC was also evaluated on all nine entity-regression tasks in RelBench
+v1. The submission identifies the method as **Kurve-RSC + CatBoost** and as a
+non-in-context system. RelBench's automated leaderboard workflow marked all
+9/9 regression task files valid and reported a mean test nMAE of **27.77%** in
+[issue #395](https://github.com/stanford-star/relbench/issues/395#issuecomment-5432081065).
+Lower values are better. The per-task values below reproduce that validation
+report; the mean is the unweighted arithmetic mean across the nine tasks.
+
+\begingroup
+\small
+
+| Task | Kurve RSC (nMAE %) |
+|---|---:|
+| `amazon/user-ltv` | 24.76 |
+| `amazon/item-ltv` | 7.23 |
+| `avito/ad-ctr` | 31.90 |
+| `event/user-attendance` | 33.88 |
+| `f1/driver-position` | 41.40 |
+| `hm/item-sales` | 6.87 |
+| `stack/post-votes` | 12.46 |
+| `trial/study-adverse` | 11.99 |
+| `trial/site-success` | 79.48 |
+| **Unweighted mean** | **27.77** |
+
+\endgroup
+
+These values are an official submission-validation result, not a controlled
+comparison with the external systems shown in the classification table. They
+should also be read as configured system results: Exhibit A discloses the
+problem-specific graph, feature, context, semantic, and learner policies used
+by the regression runners. The two generic Trial tasks are
+`trial/study-adverse` and `trial/site-success`; the other seven regression
+runners contain problem-specific configuration.
 
 \newpage
 
